@@ -117,16 +117,7 @@ class CFSE_Sync_Admin_UI {
                                 <label class="cfse-check"><input type="checkbox" form="cfse-options" name="cf_worker_auto_check" value="1" <?php checked(!empty($this->config['worker_auto_check'])); ?> /> 编辑页自动比对 CMS 版本</label>
                                 <label class="cfse-check"><input type="checkbox" form="cfse-options" name="cf_comments_sync" value="1" <?php checked(!empty($this->config['comments_sync'])); ?> /> WP 评论同步到 CMS</label>
                                 <label class="cfse-check"><input type="checkbox" form="cfse-options" name="cf_comments_pull_cron" value="1" <?php checked(!empty($this->config['comments_pull_cron'])); ?> /> 每小时从 CMS 拉取评论</label>
-                            </div>
-
-                            <div class="cfse-sec">
-                                <h4>同步参数</h4>
-                                <div class="cfse-inline">
-                                    <label>定时每批 <input type="number" id="cf_batch_size" name="cf_batch_size" value="<?php echo esc_attr($this->config['batch_size']); ?>" class="small-text" min="1" /> 篇</label>
-                                    <label>失败重试 <input type="number" id="cf_max_retries" name="cf_max_retries" value="<?php echo esc_attr($this->config['max_retries']); ?>" class="small-text" min="1" /> 次</label>
-                                    <label class="cfse-check"><input type="checkbox" name="cf_enable_logging" value="1" <?php checked($this->config['enable_logging']); ?> /> 记录日志</label>
-                                </div>
-                                <p class="description">「定时每批」只影响每日定时任务，手动同步不受此限。</p>
+                                <p class="description cfse-hint">定时任务只有两个：<b>每天补齐未同步文章</b>（随「发布文章时同步到 CMS」开关）、<b>每小时拉取评论</b>（随「每小时从 CMS 拉取评论」开关）。没有「自动拉取文章」——那项只能手动点。下次执行时间见右侧。</p>
                             </div>
 
                             <div class="cfse-sec">
@@ -166,6 +157,16 @@ class CFSE_Sync_Admin_UI {
                         <!-- ③ 高级设置 -->
                         <div class="cfse-card">
                             <h2>🔧 高级设置</h2>
+
+                            <details class="cfse-adv">
+                                <summary>⚙️ 同步参数</summary>
+                                <div class="cfse-inline">
+                                    <label>定时每批 <input type="number" id="cf_batch_size" name="cf_batch_size" value="<?php echo esc_attr($this->config['batch_size']); ?>" class="small-text" min="1" /> 篇</label>
+                                    <label>失败重试 <input type="number" id="cf_max_retries" name="cf_max_retries" value="<?php echo esc_attr($this->config['max_retries']); ?>" class="small-text" min="1" /> 次</label>
+                                    <label class="cfse-check"><input type="checkbox" name="cf_enable_logging" value="1" <?php checked($this->config['enable_logging']); ?> /> 记录日志</label>
+                                </div>
+                                <p class="description">「定时每批」只影响每日定时任务，手动同步不受此限。关掉「记录日志」后右侧日志面板不再更新。</p>
+                            </details>
 
                             <details class="cfse-adv">
                                 <summary>🔑 密码重置（CMS 后台账号）</summary>
@@ -242,6 +243,32 @@ class CFSE_Sync_Admin_UI {
                             <div class="cfse-progress">
                                 <div class="progress-bar" style="width: <?php echo esc_attr($stats['progress']); ?>%;"><?php echo esc_html(round($stats['progress'], 1)); ?>%</div>
                             </div>
+
+                            <?php
+                            /*
+                             * 定时任务只有两个（见 register_cron_jobs()）：
+                             *   1. cf_auto_export_cron — daily  — 补齐未同步文章，受「发布文章时同步到 CMS」控制
+                             *   2. cfse_pull_comments_cron — hourly — 拉取评论，受「每小时从 CMS 拉取评论」控制
+                             * 没有「自动拉取文章」的任务，拉取文章只能手动点。
+                             */
+                            $crons = array(
+                                array('label' => '每日补齐文章', 'hook' => 'cf_auto_export_cron', 'on' => !empty($this->config['sync_d1'])),
+                                array('label' => '每小时拉评论', 'hook' => 'cfse_pull_comments_cron', 'on' => !empty($this->config['comments_pull_cron'])),
+                            );
+                            ?>
+                            <div class="cfse-crons">
+                                <?php foreach ($crons as $c):
+                                    $ts = wp_next_scheduled($c['hook']);
+                                    if (!$c['on']) { $txt = '已关闭'; $cls = 'off'; }
+                                    elseif (!$ts) { $txt = '未排期'; $cls = 'off'; }
+                                    else { $txt = $this->cron_eta_text($ts); $cls = 'on'; }
+                                ?>
+                                    <div class="cfse-cron-row">
+                                        <span class="cfse-cron-name"><?php echo esc_html($c['label']); ?></span>
+                                        <span class="cfse-cron-val <?php echo esc_attr($cls); ?>"><?php echo esc_html($txt); ?></span>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
                         </div>
 
                         <div class="cfse-card">
@@ -290,73 +317,83 @@ class CFSE_Sync_Admin_UI {
 
 <style>
         /* ── 布局：左设置 / 右状态窗 ───────────────────────────── */
-        .cfse-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 20px; align-items: start; margin-top: 16px; }
-        .cfse-grid > .cfse-col { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+        .cfse-settings { font-size: 14px; }
+        .cfse-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 460px); gap: 24px; align-items: start; margin-top: 16px; }
+        .cfse-grid > .cfse-col { min-width: 0; display: flex; flex-direction: column; gap: 18px; }
         .cfse-grid .cfse-card code, .cfse-grid .stat-value { overflow-wrap: anywhere; word-break: break-word; }
 
         /* 卡片：去阴影、留细边框，减少视觉噪音 */
-        .cfse-card { background: #fff; border: 1px solid #e2e4e7; border-radius: 8px; padding: 18px 20px; box-shadow: none; }
-        .cfse-card > h2 { margin: 0 0 12px; padding-bottom: 10px; border-bottom: 1px solid #f0f0f1; font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
-        .cfse-side .cfse-card > h2 { font-size: 14px; }
+        .cfse-card { background: #fff; border: 1px solid #e2e4e7; border-radius: 8px; padding: 20px 22px; box-shadow: none; }
+        .cfse-card > h2 { margin: 0 0 14px; padding-bottom: 12px; border-bottom: 1px solid #f0f0f1; font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+        .cfse-col-side .cfse-card > h2 { font-size: 15px; }
 
         /* 卡片内的分组 */
-        .cfse-sec + .cfse-sec { margin-top: 14px; padding-top: 14px; border-top: 1px dashed #f0f0f1; }
-        .cfse-sec > h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #787c82; text-transform: none; letter-spacing: .02em; }
+        .cfse-sec + .cfse-sec { margin-top: 16px; padding-top: 16px; border-top: 1px dashed #f0f0f1; }
+        .cfse-sec > h4 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: #787c82; text-transform: none; letter-spacing: .02em; }
 
         /* 复选行：整行可点，行距一致 */
-        .cfse-check { display: block; margin: 0 0 6px; font-size: 13px; line-height: 1.7; }
+        .cfse-check { display: block; margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
         .cfse-check:last-child { margin-bottom: 0; }
         .cfse-check input { margin-right: 6px; }
+        .cfse-hint { margin: 10px 0 0; font-size: 13px; line-height: 1.65; color: #646970; }
 
         .cfse-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0; }
         .cfse-sec > .cfse-actions { margin-top: 2px; }
         .cfse-actions .button { margin: 0; }
-        .cfse-fields { display: flex; flex-wrap: wrap; gap: 10px 14px; margin: 10px 0; font-size: 13px; }
+        .cfse-fields { display: flex; flex-wrap: wrap; gap: 10px 14px; margin: 10px 0; font-size: 14px; }
         .cfse-fields label { display: flex; align-items: center; gap: 6px; margin: 0; }
 
         /* 同步参数：一行内联，别做成表格 */
-        .cfse-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; font-size: 13px; }
+        .cfse-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; font-size: 14px; margin: 12px 0 0; }
         .cfse-inline > label { display: flex; align-items: center; gap: 6px; margin: 0; }
 
         /* 手动操作：每行 = 分类标签 + 按钮组 */
-        .cfse-ops { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 10px; }
+        .cfse-ops { display: flex; flex-direction: column; gap: 10px; margin: 2px 0 12px; }
         .cfse-op { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-        .cfse-op-label { flex: 0 0 32px; font-size: 12px; color: #646970; }
+        .cfse-op-label { flex: 0 0 34px; font-size: 13px; color: #646970; }
         .cfse-op .button { margin: 0; }
-        .cfse-op-note { margin: 0 0 0 2px; font-size: 12px; color: #646970; }
+        .cfse-op-note { margin: 0 0 0 2px; font-size: 13px; color: #646970; }
 
         /* 参数表：紧凑，去掉 WP 默认的大行高 */
         .cfse-table { margin: 0; }
-        .cfse-table tr > th { width: 120px; padding: 8px 10px 8px 0; font-weight: 500; font-size: 13px; color: #1d2327; }
-        .cfse-table tr > td { padding: 8px 0; font-size: 13px; }
-        .cfse-table .description { margin: 4px 0 0; font-size: 12px; }
+        .cfse-table tr > th { width: 130px; padding: 9px 10px 9px 0; font-weight: 500; font-size: 14px; color: #1d2327; }
+        .cfse-table tr > td { padding: 9px 0; font-size: 14px; }
+        .cfse-table .description { margin: 4px 0 0; font-size: 13px; }
 
         /* 状态窗 */
-        .cfse-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-        .stat-item { background: #f6f7f7; border-radius: 6px; padding: 12px 10px; text-align: center; }
-        .stat-label { display: block; color: #646970; font-size: 11px; }
-        .stat-value { display: block; font-size: 20px; font-weight: 600; margin-top: 4px; }
-        .cfse-progress { margin: 12px 0 0; height: 8px; background: #f0f0f1; border-radius: 99px; overflow: hidden; }
+        .cfse-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .stat-item { background: #f6f7f7; border-radius: 6px; padding: 14px 12px; text-align: center; }
+        .stat-label { display: block; color: #646970; font-size: 12px; }
+        .stat-value { display: block; font-size: 24px; font-weight: 600; margin-top: 4px; }
+        .cfse-progress { margin: 14px 0 0; height: 8px; background: #f0f0f1; border-radius: 99px; overflow: hidden; }
         .cfse-progress .progress-bar { height: 100%; background: #00a32a; border-radius: 99px; font-size: 0; padding: 0; }
 
-        .cfse-log { margin: 0; background: #f6f7f7; border-radius: 6px; padding: 12px; max-height: 260px; overflow: auto; font-size: 11.5px; line-height: 1.65; color: #3c434a; white-space: pre-wrap; word-break: break-word; }
+        /* 定时任务排期 */
+        .cfse-crons { margin-top: 14px; padding-top: 12px; border-top: 1px dashed #f0f0f1; }
+        .cfse-cron-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 4px 0; font-size: 13px; }
+        .cfse-cron-name { color: #3c434a; }
+        .cfse-cron-val { color: #646970; font-variant-numeric: tabular-nums; }
+        .cfse-cron-val.on { color: #00a32a; }
+        .cfse-cron-val.off { color: #a7aaad; }
+
+        .cfse-log { margin: 0; background: #f6f7f7; border-radius: 6px; padding: 14px; max-height: 280px; overflow: auto; font-size: 13px; line-height: 1.7; color: #3c434a; white-space: pre-wrap; word-break: break-word; }
 
         .cfse-savebar { display: flex; justify-content: flex-end; }
 
         .cfse-adv { margin: 0; border: 1px solid #e2e4e7; border-radius: 6px; background: #fafafa; }
-        .cfse-adv + .cfse-adv { margin-top: 10px; }
-        .cfse-adv > summary { cursor: pointer; padding: 10px 14px; font-size: 13px; font-weight: 500; list-style: none; }
+        .cfse-adv + .cfse-adv { margin-top: 12px; }
+        .cfse-adv > summary { cursor: pointer; padding: 12px 16px; font-size: 14px; font-weight: 500; list-style: none; }
         .cfse-adv > summary::-webkit-details-marker { display: none; }
         .cfse-adv > summary::before { content: '▸'; display: inline-block; width: 16px; color: #787c82; transition: transform .15s; }
         .cfse-adv[open] > summary::before { transform: rotate(90deg); }
         .cfse-adv[open] > summary { border-bottom: 1px solid #e2e4e7; }
-        .cfse-adv > *:not(summary) { margin-left: 14px; margin-right: 14px; }
-        .cfse-adv > *:not(summary):first-of-type { margin-top: 12px; }
-        .cfse-adv > *:not(summary):last-child { margin-bottom: 14px; }
+        .cfse-adv > *:not(summary) { margin-left: 16px; margin-right: 16px; }
+        .cfse-adv > *:not(summary):first-of-type { margin-top: 14px; }
+        .cfse-adv > *:not(summary):last-child { margin-bottom: 16px; }
 
-        .version { font-size: 13px; color: #646970; font-weight: normal; }
+        .version { font-size: 14px; color: #646970; font-weight: normal; }
 
-        @media (max-width: 1100px) { .cfse-grid { grid-template-columns: 1fr; } }
+        @media (max-width: 1180px) { .cfse-grid { grid-template-columns: 1fr; } }
         </style>
         <script>
         // 测试连接（状态机第二屏 + 连接卡片共用）
@@ -969,6 +1006,30 @@ class CFSE_Sync_Admin_UI {
     // ============================================
     // 统计和日志
     // ============================================
+    /**
+     * 相对时长的中文表述。
+     *
+     * 不能用 human_time_diff()：它跟着站点 locale 走，本站是 en-US，
+     * 拼出来是「15 hours后」这种中英混排。这里自己算，单位固定中文。
+     */
+    private function human_span($seconds, $suffix = '前') {
+        $seconds = (int) $seconds;
+        if ($seconds <= 0) return '刚刚';
+        $d = (int) floor($seconds / 86400);
+        $h = (int) floor(($seconds % 86400) / 3600);
+        $m = (int) floor(($seconds % 3600) / 60);
+        if ($d > 0) return $d . ' 天 ' . $h . ' 小时' . $suffix;
+        if ($h > 0) return $h . ' 小时 ' . $m . ' 分钟' . $suffix;
+        return max(1, $m) . ' 分钟' . $suffix;
+    }
+
+    /** 定时任务下次执行的时间表述 */
+    private function cron_eta_text($ts) {
+        $diff = (int) $ts - time();
+        if ($diff <= 0) return '即将执行';
+        return $this->human_span($diff, '后');
+    }
+
     public function get_export_stats() {
         $post_counts = wp_count_posts('post');
         $total_posts = isset($post_counts->publish) ? (int) $post_counts->publish : 0;
@@ -978,7 +1039,7 @@ class CFSE_Sync_Admin_UI {
             'total_posts' => $total_posts,
             'exported_posts' => min($exported, $total_posts),
             'pending_posts' => max(0, $total_posts - $exported),
-            'last_export' => $last_export === '从未' ? '从未' : human_time_diff(strtotime($last_export)) . '前',
+            'last_export' => $last_export === '从未' ? '从未' : $this->human_span(time() - strtotime($last_export), '前'),
             'progress' => $total_posts > 0 ? ($exported / $total_posts * 100) : 0,
         );
     }
