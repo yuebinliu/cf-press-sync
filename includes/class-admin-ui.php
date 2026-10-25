@@ -248,12 +248,15 @@ class CFSE_Sync_Admin_UI {
                             /*
                              * 定时任务只有两个（见 register_cron_jobs()）：
                              *   1. cf_auto_export_cron — daily  — 补齐未同步文章，受「发布文章时同步到 CMS」控制
-                             *   2. cfse_pull_comments_cron — hourly — 拉取评论，受「每小时从 CMS 拉取评论」控制
+                             *   2. cfse_pull_comments_cron — hourly — 拉取评论，需「每小时从 CMS 拉取评论」+「WP 评论同步到 CMS」双开
                              * 没有「自动拉取文章」的任务，拉取文章只能手动点。
                              */
                             $crons = array(
-                                array('label' => '每日补齐文章', 'hook' => 'cf_auto_export_cron', 'on' => !empty($this->config['sync_d1'])),
-                                array('label' => '每小时拉评论', 'hook' => 'cfse_pull_comments_cron', 'on' => !empty($this->config['comments_pull_cron'])),
+                                array('label' => '每日补齐文章', 'hook' => 'cf_auto_export_cron', 'on' => !empty($this->config['sync_d1']),
+                                    'why' => '每天一次，把还没同步的已发布文章补推到 CMS。跟随「发布文章时同步到 CMS」开关。'),
+                                // 评论回拉要两个开关同时开：小时级开关 + 评论同步总开关（见 comments_sync_enabled()）
+                                array('label' => '每小时拉评论', 'hook' => 'cfse_pull_comments_cron', 'on' => (!empty($this->config['comments_pull_cron']) && !empty($this->config['comments_sync'])),
+                                    'why' => '每小时一次，把 CMS 上待审的评论拉回 WordPress。需要「每小时从 CMS 拉取评论」和「WP 评论同步到 CMS」同时开启。'),
                             );
                             ?>
                             <div class="cfse-crons">
@@ -263,7 +266,7 @@ class CFSE_Sync_Admin_UI {
                                     elseif (!$ts) { $txt = '未排期'; $cls = 'off'; }
                                     else { $txt = $this->cron_eta_text($ts); $cls = 'on'; }
                                 ?>
-                                    <div class="cfse-cron-row">
+                                    <div class="cfse-cron-row" title="<?php echo esc_attr($c['why']); ?>">
                                         <span class="cfse-cron-name"><?php echo esc_html($c['label']); ?></span>
                                         <span class="cfse-cron-val <?php echo esc_attr($cls); ?>"><?php echo esc_html($txt); ?></span>
                                     </div>
