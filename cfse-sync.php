@@ -56,7 +56,6 @@ if (!defined('CFSE_PLUGIN_DIR')) define('CFSE_PLUGIN_DIR', plugin_dir_path(__FIL
 if (!defined('CFSE_PLUGIN_URL')) define('CFSE_PLUGIN_URL', plugin_dir_url(__FILE__));
 if (!defined('CFSE_LOG_FILE')) define('CFSE_LOG_FILE', WP_CONTENT_DIR . '/cf-static-export.log');
 if (!defined('CFSE_DEBUG_DIR')) define('CFSE_DEBUG_DIR', WP_CONTENT_DIR . '/cf-debug');
-if (!defined('CFSE_WORKER_DIR')) define('CFSE_WORKER_DIR', CFSE_PLUGIN_DIR . 'worker/src/');
 // 历史遗留：本插件不再生成静态文件，常量仅为兼容旧代码路径（本地目录 target / 清理残留）而保留
 if (!defined('CFSE_LOCAL_DIR')) define('CFSE_LOCAL_DIR', WP_CONTENT_DIR . '/cfse-static');
 // 「Worker 端诞生」的 wp_id 判据（见 ROADMAP I.1）：WP 侧自增 ID 远小于它，
@@ -66,7 +65,7 @@ if (!defined('CFSE_WORKER_ID_MIN')) define('CFSE_WORKER_ID_MIN', 100000000000);
 // ============================================
 // 模块完整性检测
 //
-// 本插件有 300+ 个文件（含 worker/ 运行时），FTP 上传很容易漏几个。
+// 本插件有 20+ 个文件，FTP 上传很容易漏几个。
 // require 缺文件是 E_COMPILE_ERROR（编译期致命错误，try/catch 捕不到），
 // 用户只会看到「触发了致命错误」。所以先逐个 file_exists 检查，
 // 缺了就明确列出缺哪几个再退出。
@@ -164,13 +163,6 @@ class CFSE_Sync_Plugin {
         $this->init_hooks();
         $this->load_config();
         $this->register_cron_jobs();
-        $this->ensure_worker_files();
-    }
-    private function ensure_worker_files() {
-        return CFSE_Sync_Worker_CMS::get_instance()->ensure_worker_files();
-    }
-    private function generate_initial_file($name) {
-        return CFSE_Sync_Worker_CMS::get_instance()->generate_initial_file($name);
     }
 
     // ============================================
@@ -1131,15 +1123,15 @@ public function handle_deploy_worker() {
         $src = $rel->resolve_source_dir();
         $worker_dir = $src['dir'];
 
+        if (empty($src['ready'])) {
+            $this->log($src['note'], 'ERROR');
+            return false;
+        }
         if (!is_dir($worker_dir)) {
             $this->log('Worker 源码目录不存在: ' . $worker_dir, 'ERROR');
             return false;
         }
-        if ($src['source'] === '内嵌副本') {
-            $this->log($src['note'], 'WARNING');
-        } else {
-            $this->log('使用发行包源码：' . $worker_dir, 'INFO');
-        }
+        $this->log('使用发行包源码：' . $worker_dir, 'INFO');
 
         // 确保 assets 目录存在（wrangler [assets] directory 缺失会部署失败）
         $static_dir = $worker_dir . '/static';
@@ -1228,11 +1220,8 @@ public function handle_deploy_worker() {
      * D1 database_id / R2 bucket_name 代进去（KV namespace id 无从得知，留给用户填）。
      */
     private function scaffold_wrangler_toml($toml) {
-        // wrangler.toml.example 的位置随「源码目录」变（发行包 or 内嵌副本）
+        // wrangler.toml.example 在发行包目录里（源码目录的同级）
         $example = dirname($toml) . '/wrangler.toml.example';
-        if (!file_exists($example)) {
-            $example = CFSE_PLUGIN_DIR . 'worker/wrangler.toml.example';
-        }
         if (!file_exists($example)) {
             $this->log('缺少 wrangler.toml.example，无法生成部署配置', 'ERROR');
             return false;

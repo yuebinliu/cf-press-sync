@@ -352,10 +352,12 @@ class CFSE_Sync_Release {
     /**
      * 当前可用的 Worker 源码目录。
      *
-     * 优先用已下载的发行包；没有则回落到插件内嵌的 worker/ 目录
-     * （向后兼容 —— 老版本插件的 worker/ 副本还能部署，但会漂移）。
+     * **只有发行包** —— 插件不再内嵌 Worker 源码副本（2026-10-25 删）。
+     * 原因：内嵌副本必然漂移 —— CMS 仓删了 documents.js / routes.template.js，
+     * 插件里的副本还在，部署一次就把已砍掉的功能推回线上（2026-10-25 真的发生过）。
      *
-     * @return array{dir:string, source:string, note:string}
+     * @return array{dir:string, source:string, note:string, ready:bool}
+     *   ready=false ⇒ 还没下载发行包，部署会被拒绝
      */
     public function resolve_source_dir() {
         $pkg_src = $this->source_dir();
@@ -364,12 +366,14 @@ class CFSE_Sync_Release {
                 'dir'    => $pkg_src,
                 'source' => '发行包',
                 'note'   => '使用已下载的 CMS 发行包（版本与官方一致）',
+                'ready'  => true,
             );
         }
         return array(
-            'dir'    => CFSE_PLUGIN_DIR . 'worker',
-            'source' => '内嵌副本',
-            'note'   => '⚠️ 尚未下载发行包，正在用插件内嵌的旧副本 —— 它可能与官方 CMS 不一致，建议先下载发行包',
+            'dir'    => $pkg_src,
+            'source' => '未下载',
+            'note'   => '⚠️ 还没下载 CMS 发行包 —— 请先点「⬇️ 下载 CMS 发行包」再部署',
+            'ready'  => false,
         );
     }
 }

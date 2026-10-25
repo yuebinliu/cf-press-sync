@@ -81,8 +81,6 @@ class CFSE_Sync_Admin_UI {
     public function settings_page() {
         wp_enqueue_media();   // 「选择 / 上传」按钮用 WP 媒体库
         $stats = $this->get_export_stats();
-        $routes_exists = file_exists(CFSE_WORKER_DIR . 'routes.js');
-        $templates_exists = file_exists(CFSE_WORKER_DIR . 'template-engine.js');
         ?>
         <div class="wrap cfse-settings">
             <h1>🔗 CFSE Sync <span class="version">v<?php echo esc_html(CFSE_VERSION); ?></span></h1>
@@ -419,11 +417,11 @@ class CFSE_Sync_Admin_UI {
                         ?>
                         <p class="description" style="margin-top:6px;">
                             当前源码来源：
-                            <?php if ($rel_src_info['source'] === '发行包'): ?>
+                            <?php if (!empty($rel_src_info['ready'])): ?>
                                 ✅ 发行包 <strong><?php echo esc_html($rel_ver !== '' ? $rel_ver : '已下载'); ?></strong>
                                 <?php if ($rel_src !== ''): ?><span style="color:#999;">（来自 <?php echo esc_html($rel_src); ?>）</span><?php endif; ?>
                             <?php else: ?>
-                                ⚠️ <strong>尚未下载发行包</strong> —— 现在用的是插件内嵌的旧副本，可能与官方不一致
+                                ⚠️ <strong>还没下载发行包</strong> —— 请先点「⬇️ 下载 CMS 发行包」（插件不再内嵌源码副本）
                             <?php endif; ?>
                         </p>
                         <?php if (isset($_GET['release_dl'])): ?>

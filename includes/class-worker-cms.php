@@ -531,21 +531,6 @@ class CFSE_Sync_Worker_CMS {
     }
 
 
-    // ============================================
-    // 确保 Worker 文件存在
-    // ============================================
-    public function ensure_worker_files() {
-        $files = array(
-            'routes.js' => CFSE_WORKER_DIR . 'routes.js',
-        );
-        foreach ($files as $name => $path) {
-            if (!file_exists($path)) {
-                $this->generate_initial_file($name);
-            }
-        }
-    }
-
-
     /** 把 Worker 的 JSON 分类/标签（[{name,slug}] 或字符串数组）映射到 WP：按 slug/name 找，缺则创建 */
     public function apply_worker_terms($post_id, $json, $taxonomy) {
         $terms = json_decode((string) $json, true);
@@ -1013,22 +998,7 @@ public function get_remote_storage_pattern() {
 }
 
 
-    /**
-     * 生成占位文件（Worker 目录为空时的兜底）。
-     *
-     * 2026-10-25：routes.js 不再由插件生成 —— CMS 侧已运行时化，
-     *   URL 结构从 D1 settings k='site' 的 storagePattern 读。
-     *   这里的占位内容也相应改成提示「请下载 CMS 发行包」。
-     */
-    public function generate_initial_file($name) {
-        $content = $name === 'routes.js'
-            ? '// routes.js —— CMS 发行包的一部分' . "\n"
-              . '// 本插件不再生成路由规则：URL 结构由 CMS 后台管理（存 D1 settings k=\'site\' 的 storagePattern）。' . "\n"
-              . '// 请在设置页「部署 CMS」里下载发行包，把完整 src/ 覆盖到本目录。' . "\n"
-            : '// 模板文件 - 将由插件自动生成' . "\n" . '// 请点击"同步模板"生成完整内容' . "\n" . 'export function renderHomepage() {' . "\n" . '    return \'<h1>请先点击"同步模板"生成模板配置</h1>\';' . "\n" . '}';
-        @file_put_contents(CFSE_WORKER_DIR . $name, $content);
-    }
-
+    
 
 /**
  * 修复 Permalink 转存储模式
