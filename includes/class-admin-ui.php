@@ -362,6 +362,11 @@ class CFSE_Sync_Admin_UI {
                             var extra = r.data && r.data.siteName ? ('（' + r.data.siteName + '）') : '';
                             out.textContent = '✓ 连接成功' + extra;
                             out.style.color = '#00a32a';
+                            // 时区不一致：单独一行标黄，否则用户只会看到「连接成功」而忽略
+                            if (r.data && r.data.tzWarning) {
+                                out.textContent += '　' + r.data.tzWarning;
+                                out.style.color = '#996800';
+                            }
                         } else {
                             out.textContent = '✗ ' + ((r && r.data && r.data.error) ? r.data.error : '测试失败');
                             out.style.color = '#d63638';

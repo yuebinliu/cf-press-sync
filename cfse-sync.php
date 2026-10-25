@@ -1402,10 +1402,24 @@ public function handle_deploy_worker() {
                     if (is_array($j)) $info = $j;
                 }
             } catch (Throwable $e) { /* 拿不到就算了，不影响连接判定 */ }
+            // 时区一致性守卫：CMS 的 timezoneOffset 必须与本站 gmt_offset 一致。
+            // 不一致 ⇒ CMS 后台写入的时间戳会和 WP 差一个时区，「检查 Worker 版本」
+            // 会成批误判成「远端更新」。2026-10-26 实际踩到（CMS 是 0，本站是 +8）。
+            $tz_warn = '';
+            $wp_tz_sec = (int) round(((float) get_option('gmt_offset', 0)) * 3600);
+            if (isset($info['timezoneOffset']) && (int) $info['timezoneOffset'] !== $wp_tz_sec) {
+                $cms_tz_sec = (int) $info['timezoneOffset'];
+                $fmt = function ($sec) { return ($sec === 0) ? 'UTC+0' : sprintf('UTC%+g', $sec / 3600); };
+                $tz_warn = sprintf(
+                    '⚠ 时区不一致：CMS 是 %s，本站是 %s。在 CMS 后台改文章时，时间戳会差 %g 小时，导致「检查 Worker 版本」误判。点「🔄 同步站点设置到 D1」修正。',
+                    $fmt($cms_tz_sec), $fmt($wp_tz_sec), abs($cms_tz_sec - $wp_tz_sec) / 3600
+                );
+            }
             wp_send_json_success(array(
                 'message' => '连接成功',
                 'siteName' => isset($info['name']) ? $info['name'] : '',
                 'storagePattern' => isset($info['storagePattern']) ? $info['storagePattern'] : '',
+                'tzWarning' => $tz_warn,
             ));
         }
         $onb->mark_unconnected();
