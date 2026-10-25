@@ -6,6 +6,17 @@
 
 ## 状态
 
+**v2.0.0（2026-10-25）** —— 收敛为「CMS 的 WordPress 客户端」。
+
+这一版砍掉了一批与「同步内容」无关的东西：
+
+| 变化 | 说明 |
+|---|---|
+| **不再内嵌 Worker 源码** | 部署改用从 CMS 官方下载的**发行包**。以前内嵌一份副本，必然漂移 —— 2026-10-25 真的漂了：CMS 仓删掉的 `documents.js` 还在插件副本里，部署一次就把已砍掉的文档库推回线上 |
+| **不再生成路由规则** | `routes.js` 的 URL 结构改成运行时从 D1 读（CMS 侧已运行时化）。改 URL 结构在 **CMS 后台**改完即生效，不用部署、不用插件参与 |
+| **砍掉 S3 / local provider** | 静态托管由 `wp-static-deploy` 插件承接。本插件只跟 CMS 打交道 |
+| **后台 UI 重排为三屏状态机** | 按「未连接 / 已配置 / 已连接」显示不同内容。基础层永远可见，高级层折叠 |
+
 **v1.0.0（2026-10-21）** —— 从 `cf-static-export-pro` 2.5.0 拆出的「CMS 同步」那一半。
 渲染链路、本地落盘、R2 单页上传、模板编辑器、主题资源同步、第三方托管 transport 全部移除。
 
@@ -25,70 +36,80 @@
 Worker 命中 R2 就直接返回，不会回查 D1。如果不删，改完文章后线上永远是上一次的旧页面。
 删掉之后 `routes.js` 会落到 `renderSinglePageOnDemand()`，用最新 D1 内容重新渲染并回填 —— 这是整套设计里最关键的一步。
 
+## 三屏状态机
+
+设置页按「你跟 CMS 连到什么程度」显示不同的内容：
+
+| 状态 | 判定 | 你看到什么 |
+|---|---|---|
+| **未连接** | 没填 CMS 地址 | 三步引导：准备 Cloudflare 账号 → 下载并部署 CMS → 填连接信息。主路径是「⬇️ 下载 CMS 发行包」按钮，图文教程是次要按钮 |
+| **已配置** | 填了地址但没测过 | 显示已填的地址与密钥 + 「🔌 测试连接」 |
+| **已连接** | 测通过 | 直接显示 CMS 地址，引导去「⚡ 同步内容」 |
+
+高级区块（部署 CMS / Worker 后台账号 / 站点列表）默认折叠 —— 基础层永远可见。
+
+## 部署 CMS：发行包机制
+
+插件不内嵌源码，部署时从两个源按顺序拉取发行包（`.tar.gz`）：
+
+1. **GitHub Releases** —— 查 API 拿最新版的 `.tar.gz` 资产
+2. **官网** —— 可配置的站点地址，默认 `https://yuebin.uk`，路径 `/downloads/cf-cms-latest.tar.gz`
+3. **固定生产地址** —— `https://wp-static-pro.yuebinliu.workers.dev`（第三备源）
+
+下载后解压到 `cms-package/cf-cms/`，「部署」时用 `wrangler` 把它推上去。
+
+**为什么是 tar.gz 不是 zip**：`ZipArchive` 是 PHP 的可选扩展，很多服务器没装；`PharData` 是 PHP 自带的，普遍可用。
+
+**为什么官网地址是配置项**：将来换正式域名只改设置，不用改代码。
+
 ## 目录
 
 ```
 cfse-sync/
-├── cfse-sync.php               # 插件入口（常量、钩子、同步链路、Worker 部署）
-├── uninstall.php
+├── cfse-sync.php              主类（转发层）
 ├── includes/
-│   ├── class-admin-ui.php      # 设置页 / 文章面板 / 托管目标表格
-│   ├── class-worker-cms.php    # D1 / R2 读写、拉取、评论同步
-│   ├── class-transports.php    # cloudflare（Worker API）+ s3
-│   └── class-compat.php        # 兼容函数（cfse_storage_pattern）
-├── assets/                     # 后台 css / js
-├── vendor/parsedown/           # Markdown 渲染（WP 前台预览用）
-└── worker/                     # Worker 运行时（随插件分发）
-    ├── src/                    # index / routes / template-engine / admin / database …
-    ├── static/                 # 后台 UI、highlight.js、内置风格 cfse-demo
-    ├── migrations/
-    ├── scripts/                # setup.mjs（建 D1/KV/R2）、sync-themes-index.mjs
-    ├── wrangler.toml.example   # 首次部署时自动生成 wrangler.toml
-    └── package.json
+│   ├── class-admin-ui.php     后台设置页 / 文章面板
+│   ├── class-worker-cms.php   D1 / R2 同步
+│   ├── class-transports.php   多目标抽象（只对接 CMS）
+│   ├── class-release.php      发行包下载 / 解压 / 部署
+│   ├── class-onboarding.php   连接状态机（三屏）
+│   └── class-compat.php       兼容层
+├── assets/
+│   ├── admin.css
+│   └── cfse-onboarding.css    状态机样式
+├── test/
+│   └── verify-onboarding.php  离线验证（14 项断言）
+└── vendor/parsedown/
 ```
 
-## 安装
+## 目录约定
 
-1. 整个 `cfse-sync` 目录复制到 `wp-content/plugins/`
-2. 启用 **CFSE Sync for WordPress**
-3. **设置 → CFSE 同步**：
-   - 🎯 托管目标 → 添加一条 `Cloudflare` 模板的目标，填 Worker 地址 + Auth Key
-   - 该目标「⚙️ 配置」→ 填 Account ID、API Token、R2 Bucket、D1 Database ID
-   - 🔄 同步路由规则 → 🚀 部署 Worker
-   - 📤 全量同步到 D1
+- **`cms-package/`** —— 下载的发行包解压在这里（运行时生成，不入库）
+- **`worker/`** —— **已删除**。以前内嵌源码副本，2026-10-25 被发行包机制取代
 
-`worker/` 需要 `npm install`（wrangler 部署时会打包 `marked`）。首次点「🚀 部署 Worker」会自动从 `wrangler.toml.example` 生成 `wrangler.toml`，并把插件里已填的 D1 / R2 名字代进去；**KV namespace id 仍需手工补**（`npx wrangler kv namespace create cfse-cache`）。
+## 离线验证
 
-## 与另两个插件的关系
+不激活插件、不碰数据库，用 WP 函数桩跑逻辑：
 
-| 插件 | 定位 |
+```bash
+# 在服务器上
+docker exec web-php php /var/www/html/wp-content/plugins/cfse-sync/test/verify-onboarding.php
+```
+
+覆盖：三屏状态判定 · 状态迁移 · get_primary 回落 · 目标列表与单表单对齐 · 发行包三源 · 源码目录解析。
+
+## 与 CMS 的边界
+
+| 归 CMS 后台管 | 归本插件管 |
 |---|---|
-| **CFSE Sync for WordPress**（本仓库） | WordPress → D1 数据同步 + Worker 部署。产出**数据** |
-| **WP Static Deploy** | 抓取 WP 前台 HTML，发布到 Cloudflare Pages / S3 / FTP / WebDAV / GitHub / Netlify / Vercel。产出**文件** |
+| URL 结构（permalink） | 文章 / 评论数据同步 |
+| 模板、风格、外观 | 图片上传到 R2 |
+| 缓存策略、每页文章数 | 旧单页清理 |
+| 站点信息（名称、描述、时区、默认作者） | 连接与部署 |
 
-两者都 hook `save_post`，**同一站点不要同时启用**。
+**唯一例外**：插件会读 CMS 的 `storagePattern` 来算 R2 存储路径 —— 两边必须一致，否则删不到旧单页（Worker 命中 R2 直接返回，不回查 D1）。
 
-## 与旧版的差异（2.5.0 → 1.0.0）
+## 相关
 
-删掉的：
-
-- `generate_post_html` / `render_with_template` / `fetch_from_frontend` / `post_process_html` / `normalize_source_hosts` / `generate_fallback_html`
-- `build_post_artifact` / `write_artifact_local` / `publish_artifact` / `export_post_by_switches` / `do_export_post`
-- `generate_post_local` / `publish_post_local` / `export_post_manual` / `run_export_mode`
-- 发布行为三开关（同步 D1 / 生成静态文件 / 上传 R2）与手动导出参数
-- 模板编辑器（`views/template-editor.php` 2032 行）、皮肤构建器、主题资源同步、风格资源同步
-- GitHub / GitLab / Netlify / Vercel / FTP / WebDAV / 本地目录 七种 transport（约 800 行）
-- `exec` 并发导出（子进程脚本 `tools/bulk-export-worker.php` 本就不在包里）
-
-改动的：
-
-- `export_post()` 只写 D1 + 同步媒体 + 删旧单页；`sync_d1` 开关仍然生效（关掉后只能手动全量同步）
-- 全量同步改为串行（每篇一次 D1 批量请求，不需要并发）
-- 列表状态列 / 状态面板文案：已导出 → 已同步
-- 设置页 slug：`cf-static-export-pro` → `cfse-sync`
-- 插件主文件：`cf-static-export-pro.php` → `cfse-sync.php`
-
-保留的（代码前缀 `CFSE_` / `cfse_` 共 754 处，不改名）：
-
-- 所有 option 名（`cf_*`）、post meta（`cfse_site` / `_cfse_synced_d1` / `content_format`）
-- D1 表结构与 SQL、Worker 端代码、评论双向同步、拉取、站点信息合并写入
+- **CMS 仓库**：`cf-cms` —— Worker 端源码，本插件的部署对象
+- **静态托管**：`wp-static-deploy` —— 通用静态托管（9 种 transport），与本插件无关
