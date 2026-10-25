@@ -94,192 +94,175 @@ class CFSE_Sync_Admin_UI {
                 <div class="notice notice-success is-dismissible"><p>✅ Worker 部署成功！</p></div>
             <?php endif; ?>
 
+            <?php CFSE_Sync_Onboarding::get_instance()->render_current_screen(); ?>
+
             <form method="post" action="options.php" id="cfse-options">
                 <div class="cfse-grid">
-<div class="cfse-col">
-                        <!-- ① 状态机横幅：按「未连接 / 已配置 / 已连接」显示不同内容 -->
-                        <?php CFSE_Sync_Onboarding::get_instance()->render_current_screen(); ?>
+                    <div class="cfse-col cfse-col-main">
 
-                        <!-- ② 连接 CMS（基础层，永远可见） -->
+                        <!-- ① 连接 -->
                         <div class="cfse-card">
-                            <h2 style="margin-top:0;">📡 连接 CMS</h2>
-                            <p class="description">填你的 CMS 地址和同步密钥。密钥在 <b>CMS 后台 → ⚙️ 设置</b> 里看。
-                                <b>自托管单站</b>只需要这两个框。</p>
+                            <h2>📡 连接 CMS</h2>
                             <?php $this->render_connection_form(); ?>
-
                         </div>
-                <div class="cfse-card" style="margin-top:16px;">
-                    <h2>🛠️ 同步设置</h2>
-<div class="cfse-sec">
-    <h4 style="margin:14px 0 4px;">📤 全量同步 / 拉取 <span class="dashicons dashicons-editor-help" title="把全部已发布文章的数据写进 D1（单页由 Worker 现场渲染）。与「其他自动设置」里的自动同步相互独立。"></span></h4>
-    <div class="cfse-grp-body">
-        <div class="cfse-grp-sub">拉取参数：</div>
-        <label><input type="checkbox" name="cfse_pull_overwrite" value="1" form="cfse-pull-form" /> 拉取时覆盖同 ID 文章（以 Worker 版本为准）</label>
-        <div class="cfse-actions" style="margin-top:10px;">
-            <button type="submit" form="cfse-act-bulk" class="button button-primary" onclick="return confirm('把全部已发布文章同步到 D1（单页由 Worker 渲染），确认继续？')">📤 全量同步到 D1</button>
-            <button type="submit" form="cfse-pull-form" class="button" onclick="return confirm('从 Worker 拉取「Worker 端诞生」的文章到 WordPress，确认继续？')">☁️ 从 Worker 拉取</button>
-            <button type="submit" form="cfse-act-clear" class="button" onclick="return confirm('重置同步标记？只清 WP 侧记账，不碰 D1 / R2 / 缓存。')">♻️ 重置同步标记</button>
-        </div>
-    </div>
-</div>
-<div class="cfse-sec">
-    <h4 style="margin:14px 0 4px;">💬 评论同步设置 <span class="dashicons dashicons-editor-help" title="静态站评论：读者提交 → 存 D1（待审）→ WP 拉取落地 → 你在这里审核；前台展示与审核在 Worker 后台「💬 评论」页配置。"></span></h4>
-    <div class="cfse-grp-body">
-        <label><input type="checkbox" form="cfse-options" name="cf_comments_pull_cron" value="1" <?php checked(!empty($this->config['comments_pull_cron'])); ?> /> 每小时自动从 Worker 拉取评论</label>
-        <label><input type="checkbox" form="cfse-options" name="cf_comments_sync" value="1" <?php checked(!empty($this->config['comments_sync'])); ?> /> 把 WP 评论自动同步到 D1</label>
-        <p style="margin-top:8px;">
-            <a class="button" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=cfse_sync_comments'), 'cfse_sync_comments')); ?>">⬆️ 同步评论到 D1</a>
-            <a class="button" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=cfse_pull_comments'), 'cfse_pull_comments')); ?>">⬇️ 从 Worker 拉取评论</a>
-        </p>
-    </div>
-</div>
-<div class="cfse-sec">
-    <h4 style="margin:14px 0 4px;">⚙️ 其他自动设置 <span class="dashicons dashicons-editor-help" title="控制「发布 / 编辑文章时」的自动行为。"></span></h4>
-    <div class="cfse-grp-body">
-        <div class="cfse-grp-sub">发布文章时：</div>
-        <label><input type="checkbox" form="cfse-options" name="cf_sync_d1" value="1" <?php checked(!empty($this->config['sync_d1'])); ?> /> 自动同步到 D1</label>
-        <div class="cfse-grp-sub">编辑页面时：</div>
-        <label><input type="checkbox" form="cfse-options" name="cf_worker_auto_check" value="1" <?php checked(!empty($this->config['worker_auto_check'])); ?> /> 自动比对 Worker 版本</label>
-    </div>
-</div>
-<div class="cfse-sec">
-    <h4 style="margin:14px 0 4px;">🔁 站点信息同步 <span class="dashicons dashicons-editor-help" title="只同步基础字段：站点名 / 描述 / URL / 存储结构 / 时区 / 默认作者。导航菜单、单页布局、文档库映射、logo、横幅、社交、评论 全部由 CMS 后台维护，永远不会被覆盖。"></span></h4>
-    <div class="cfse-grp-body">
-        <p class="description" style="margin-top:0;">WP 侧<b>不再自动</b>把站点信息写进 D1（改站点标题/描述、同步模板、初始化部署 都不会写）。需要把当前 WP 站点信息推给线上 CMS 时点下面的按钮 —— <b>合并写入</b>，不会动 CMS 后台独有的设置。</p>
-        <button type="submit" form="cfse-act-siteinfo" class="button">🔄 同步站点设置到 D1</button>
-        <?php if (isset($_GET['site_info_synced'])): ?>
-            <?php if ($_GET['site_info_synced'] === '1'): ?>
-                <div class="notice notice-success is-dismissible" style="margin:10px 0 0;"><p>✅ 站点基础信息已合并写入 D1（导航菜单 / 单页布局 / 文档库映射 未被改动）。</p></div>
-            <?php else: ?>
-                <div class="notice notice-error is-dismissible" style="margin:10px 0 0;"><p>❌ 同步失败：没有可用的「D1 数据」能力目标，或请求被拒（详见插件日志）。</p></div>
-            <?php endif; ?>
-        <?php endif; ?>
-    </div>
-</div>
-<div class="cfse-sec">
-    <h4 style="margin:14px 0 4px;">🔧 Worker端管理 <span class="dashicons dashicons-editor-help" title="创建 Worker 后台账号、同步路由、部署 Worker 代码。"></span></h4>
-    <div class="cfse-grp-body">
-        <details class="cfse-adv" style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">
-            <summary>👤 Worker 后台账号（高级）—— 忘了密码时用它重置</summary>
-            <p class="description">
-                为 Worker 管理后台创建登录用户（PBKDF2-SHA256 存入 D1 <code>users</code> 表）。用户名默认取本站第一个管理员；
-                密码仅本次提交时使用、不落 WordPress。可在 Worker 后台登录后修改。
-            </p>
-            <?php $seed_admin = get_users(array('role' => 'administrator', 'number' => 1)); $seed_u = !empty($seed_admin) ? $seed_admin[0] : null; ?>
-                <label>用户名 <input type="text" form="cfse-act-seed" name="cf_admin_username" value="<?php echo esc_attr($seed_u ? $seed_u->user_login : 'admin'); ?>" /></label>
-                &nbsp;
-                <label>初始密码 <input type="password" form="cfse-act-seed" name="cf_admin_password" autocomplete="new-password" required /></label>
-                &nbsp;
-                <label>邮箱 <input type="email" form="cfse-act-seed" name="cf_admin_email" value="<?php echo esc_attr($seed_u ? $seed_u->user_email : ''); ?>" /></label>
-                <button type="submit" form="cfse-act-seed" class="button button-primary">👤 写入 Worker 后台用户</button>
-            <?php if (isset($_GET['seeded']) && $_GET['seeded'] === '1'): ?>
-                <div class="notice notice-success is-dismissible" style="margin:8px 0 0;"><p>✅ Worker 后台用户已写入 D1（需「🚀 初始化部署」后，Worker 的 /api/login 才能用新用户登录）。</p></div>
-            <?php elseif (isset($_GET['seeded']) && $_GET['seeded'] === '0'): ?>
-                <div class="notice notice-error is-dismissible" style="margin:8px 0 0;"><p>❌ 写入失败：用户名无效或密码少于 8 位。</p></div>
-            <?php endif; ?>
-        </details>
 
-        <details class="cfse-adv" style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;"<?php echo (isset($_GET['cfse_expand']) && $_GET['cfse_expand'] === 'deploy') ? ' open' : ''; ?>>
-                        <summary>🚀 部署 / 升级 CMS（高级）</summary>
-                        <p class="description">
-                            插件不再内嵌 Worker 源码副本 —— 部署时用的是<b>从 CMS 官方下载的发行包</b>，
-                            这样插件里的代码永远不会和官方版本漂移。
-                        </p>
-                        <?php
-                        $rel_ver = (string) get_option('cf_cms_release_version', '');
-                        $rel_src = (string) get_option('cf_cms_release_source', '');
-                        $rel_src_info = CFSE_Sync_Release::get_instance()->resolve_source_dir();
-                        ?>
-                        <p class="description" style="margin-top:6px;">
-                            当前源码来源：
-                            <?php if (!empty($rel_src_info['ready'])): ?>
-                                ✅ 发行包 <strong><?php echo esc_html($rel_ver !== '' ? $rel_ver : '已下载'); ?></strong>
-                                <?php if ($rel_src !== ''): ?><span style="color:#999;">（来自 <?php echo esc_html($rel_src); ?>）</span><?php endif; ?>
-                            <?php else: ?>
-                                ⚠️ <strong>还没下载发行包</strong> —— 请先点「⬇️ 下载 CMS 发行包」（插件不再内嵌源码副本）
-                            <?php endif; ?>
-                        </p>
-                        <?php if (isset($_GET['release_dl'])): ?>
-                            <?php if ($_GET['release_dl'] === '1'): ?>
-                                <div class="notice notice-success is-dismissible" style="margin:8px 0;"><p>✅ CMS 发行包已下载并解压，可以点「部署」了。</p></div>
-                            <?php else: ?>
-                                <div class="notice notice-error is-dismissible" style="margin:8px 0;">
-                                    <p>❌ 下载失败<?php if (!empty($_GET['release_error'])): ?>：<?php echo esc_html(wp_unslash($_GET['release_error'])); ?><?php endif; ?></p>
+                        <!-- ② 内容同步 -->
+                        <div class="cfse-card">
+                            <h2>🔄 内容同步</h2>
+
+                            <div class="cfse-sec">
+                                <h4>手动</h4>
+                                <div class="cfse-actions">
+                                    <button type="submit" form="cfse-act-bulk" class="button button-primary" onclick="return confirm('把全部已发布文章同步到 D1（单页由 Worker 渲染），确认继续？')">📤 全量同步到 D1</button>
+                                    <button type="submit" form="cfse-pull-form" class="button" onclick="return confirm('从 Worker 拉取「Worker 端诞生」的文章到 WordPress，确认继续？')">☁️ 从 Worker 拉取</button>
+                                    <button type="submit" form="cfse-act-clear" class="button" onclick="return confirm('重置同步标记？只清 WP 侧记账，不碰 D1 / R2 / 缓存。')">♻️ 重置同步标记</button>
                                 </div>
+                                <label class="cfse-check"><input type="checkbox" name="cfse_pull_overwrite" value="1" form="cfse-pull-form" /> 拉取时覆盖已存在的文章（以 Worker 版本为准）</label>
+                            </div>
+
+                            <div class="cfse-sec">
+                                <h4>自动</h4>
+                                <label class="cfse-check"><input type="checkbox" form="cfse-options" name="cf_sync_d1" value="1" <?php checked(!empty($this->config['sync_d1'])); ?> /> 发布文章时同步到 D1</label>
+                                <label class="cfse-check"><input type="checkbox" form="cfse-options" name="cf_worker_auto_check" value="1" <?php checked(!empty($this->config['worker_auto_check'])); ?> /> 编辑页自动比对 Worker 版本</label>
+                                <label class="cfse-check"><input type="checkbox" form="cfse-options" name="cf_comments_pull_cron" value="1" <?php checked(!empty($this->config['comments_pull_cron'])); ?> /> 每小时从 Worker 拉取评论</label>
+                                <label class="cfse-check"><input type="checkbox" form="cfse-options" name="cf_comments_sync" value="1" <?php checked(!empty($this->config['comments_sync'])); ?> /> WP 评论同步到 D1</label>
+                            </div>
+
+                            <div class="cfse-sec">
+                                <h4>评论</h4>
+                                <div class="cfse-actions">
+                                    <a class="button" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=cfse_sync_comments'), 'cfse_sync_comments')); ?>">⬆️ 同步评论到 D1</a>
+                                    <a class="button" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=cfse_pull_comments'), 'cfse_pull_comments')); ?>">⬇️ 从 Worker 拉取评论</a>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- ③ 站点信息 -->
+                        <div class="cfse-card">
+                            <h2>🔁 站点信息</h2>
+                            <p class="cfse-hint">只写 4 项：<b>站点名 / 描述 / 时区 / 默认作者</b>。菜单、布局、logo、横幅、社交、评论、URL 结构都不会动。</p>
+                            <div class="cfse-actions">
+                                <button type="submit" form="cfse-act-siteinfo" class="button">🔄 同步站点设置到 D1</button>
+                            </div>
+                            <?php if (isset($_GET['site_info_synced'])): ?>
+                                <?php if ($_GET['site_info_synced'] === '1'): ?>
+                                    <div class="notice notice-success is-dismissible" style="margin:10px 0 0;"><p>✅ 已合并写入 D1（菜单 / 布局 / URL 结构未改动）。</p></div>
+                                <?php else: ?>
+                                    <div class="notice notice-error is-dismissible" style="margin:10px 0 0;"><p>❌ 同步失败：没有可用的「D1 数据」目标，或请求被拒（详见日志）。</p></div>
+                                <?php endif; ?>
                             <?php endif; ?>
-                        <?php endif; ?>
-                        <div style="margin: 10px 0; display: flex; gap: 10px; flex-wrap: wrap;">
-                            <button type="submit" form="cfse-act-download" class="button">⬇️ 下载 CMS 发行包</button>
-                            <button type="submit" form="cfse-act-deploy" class="button button-primary" onclick="return confirm('把 CMS 发行包部署到 Cloudflare？需本机已登录 wrangler。')">🚀 部署到 Cloudflare</button>
                         </div>
-                        <p class="description" style="font-size:12px;color:#999;">
-                            下载源（按顺序尝试）：GitHub Releases → 官网 <code><?php echo esc_html(get_option('cf_cms_package_url', CFSE_Sync_Release::DEFAULT_SITE_URL)); ?></code> → 固定生产地址。
-                            官网地址可在下方「基础配置」里改。<br/>
-                            💡 模板与风格由 Worker 后台的「🎨 模板编辑器」维护（存 R2 <code>wp-content/themes/&lt;id&gt;/tpl.json</code>），插件侧不打包模板。
-                        </p>
-                    </details>
-    </div>
-</div>
 
-                </div>
-                </div>
-
-<div class="cfse-col">
-
-<div class="cfse-card">
-                    <h2>📊 状态面板</h2>
-                    <div class="cfse-stats">
-                        <div class="stat-item"><span class="stat-label">总文章</span><span class="stat-value"><?php echo esc_html($stats['total_posts']); ?></span></div>
-                        <div class="stat-item"><span class="stat-label">已同步</span><span class="stat-value"><?php echo esc_html($stats['exported_posts']); ?></span></div>
-                        <div class="stat-item"><span class="stat-label">待同步</span><span class="stat-value"><?php echo esc_html($stats['pending_posts']); ?></span></div>
-                        <div class="stat-item"><span class="stat-label">最后同步</span><span class="stat-value"><?php echo esc_html($stats['last_export']); ?></span></div>
-                    </div>
-                    <div class="cfse-progress">
-                        <div class="progress-bar" style="width: <?php echo esc_attr($stats['progress']); ?>%;"><?php echo esc_html(round($stats['progress'], 1)); ?>%</div>
-                    </div>
-
-
-
-                </div>
-
-                <!-- ⚙️ 基础配置 -->
-                <div class="cfse-card">
-                    <h2>⚙️ 基础配置</h2>
-                        <?php settings_fields('cf_static_export_pro'); ?>
-                        <table class="form-table">
-                            <tr><th><label for="cf_batch_size">批量大小</label></th>
-                                <td><input type="number" id="cf_batch_size" name="cf_batch_size" value="<?php echo esc_attr($this->config['batch_size']); ?>" style="width:100px" min="1" />
-                                    <p class="description">自动同步（定时任务）每批处理多少篇</p></td></tr>
-                            <tr><th><label for="cf_posts_per_page">列表每页文章数</label></th>
-                                <td><input type="number" id="cf_posts_per_page" name="cf_posts_per_page" value="<?php echo esc_attr($this->config['posts_per_page']); ?>" style="width:100px" min="1" />
-                                    <p class="description">首页/分类/标签/归档每页显示多少篇（默认与 WP「设置→阅读」一致 = 10）。<b>此项已由 CMS 后台接管</b>（D1 settings k='cache'），此处仅为 WP 侧参考值。</p></td></tr>
-                            <tr><th><label for="cf_max_retries">写入重试次数</label></th>
-                                <td><input type="number" id="cf_max_retries" name="cf_max_retries" value="<?php echo esc_attr($this->config['max_retries']); ?>" style="width:100px" min="1" /></td></tr>
-                            <tr><th><label for="cf_cms_package_url">CMS 发行包官网地址</label></th>
-                                <td><input type="url" id="cf_cms_package_url" name="cf_cms_package_url" value="<?php echo esc_attr(get_option('cf_cms_package_url', CFSE_Sync_Release::DEFAULT_SITE_URL)); ?>" style="width:320px" />
-                                    <p class="description">下载发行包的第二个来源。默认 <code><?php echo esc_html(CFSE_Sync_Release::DEFAULT_SITE_URL); ?></code>；将来有正式域名了改这里即可，代码不用动。</p></td></tr>
-                            <tr><th><label for="cf_cms_github_repo">CMS GitHub 仓库</label></th>
-                                <td><input type="text" id="cf_cms_github_repo" name="cf_cms_github_repo" value="<?php echo esc_attr(get_option('cf_cms_github_repo', CFSE_Sync_Release::DEFAULT_GITHUB_REPO)); ?>" style="width:320px" placeholder="owner/repo" />
-                                    <p class="description">发行包的第一个下载源（GitHub Releases 最新版）。格式 <code>owner/repo</code>。</p></td></tr>
-                            <tr><th>日志与调试</th>
-                                <td>
-                                    <label><input type="checkbox" name="cf_enable_logging" value="1" <?php checked($this->config['enable_logging']); ?> /> 启用日志</label><br/>
-                                    <label><input type="checkbox" name="cf_debug_mode" value="1" <?php checked($this->config['debug_mode']); ?> /> 调试模式</label>
-                                </td></tr>
-                        </table>
-                    </div>
-<div class="cfse-card" style="margin-top:16px;">
-                        <h4 style="margin-top:0;">📋 最近日志</h4>
-                        <pre><?php echo esc_html($this->get_recent_logs(10)); ?></pre>
-                    </div>
-</div>
-            </div>
-
-                        <div style="text-align:right;margin-top:18px;">
-                            <button type="submit" form="cfse-options" class="button button-primary button-hero">保存配置</button>
+                        <!-- ④ 基础参数 -->
+                        <div class="cfse-card">
+                            <h2>⚙️ 基础参数</h2>
+                            <?php settings_fields('cf_static_export_pro'); ?>
+                            <table class="form-table cfse-table">
+                                <tr><th><label for="cf_batch_size">批量大小</label></th>
+                                    <td><input type="number" id="cf_batch_size" name="cf_batch_size" value="<?php echo esc_attr($this->config['batch_size']); ?>" class="small-text" min="1" />
+                                        <p class="description">定时任务每次处理多少篇</p></td></tr>
+                                <tr><th><label for="cf_max_retries">写入重试次数</label></th>
+                                    <td><input type="number" id="cf_max_retries" name="cf_max_retries" value="<?php echo esc_attr($this->config['max_retries']); ?>" class="small-text" min="1" /></td></tr>
+                                <tr><th><label for="cf_posts_per_page">列表每页文章数</label></th>
+                                    <td><input type="number" id="cf_posts_per_page" name="cf_posts_per_page" value="<?php echo esc_attr($this->config['posts_per_page']); ?>" class="small-text" min="1" />
+                                        <p class="description">仅 WP 侧参考值；前台列表分页由 <b>CMS 后台</b>控制。</p></td></tr>
+                                <tr><th>日志</th>
+                                    <td>
+                                        <label class="cfse-check"><input type="checkbox" name="cf_enable_logging" value="1" <?php checked($this->config['enable_logging']); ?> /> 启用</label>
+                                        <label class="cfse-check"><input type="checkbox" name="cf_debug_mode" value="1" <?php checked($this->config['debug_mode']); ?> /> 调试模式</label>
+                                    </td></tr>
+                            </table>
                         </div>
-                </form>
-            </div><!-- /.wrap.cfse-settings -->
+
+                        <!-- ⑤ 高级 -->
+                        <div class="cfse-card">
+                            <h2>🔧 高级</h2>
+
+                            <details class="cfse-adv">
+                                <summary>👤 Worker 后台账号 —— 忘了密码时用它重置</summary>
+                                <p class="description">写入 D1 <code>users</code> 表，密码不落 WordPress。</p>
+                                <?php $seed_admin = get_users(array('role' => 'administrator', 'number' => 1)); $seed_u = !empty($seed_admin) ? $seed_admin[0] : null; ?>
+                                <div class="cfse-fields">
+                                    <label>用户名 <input type="text" form="cfse-act-seed" name="cf_admin_username" value="<?php echo esc_attr($seed_u ? $seed_u->user_login : 'admin'); ?>" /></label>
+                                    <label>初始密码 <input type="password" form="cfse-act-seed" name="cf_admin_password" autocomplete="new-password" required /></label>
+                                    <label>邮箱 <input type="email" form="cfse-act-seed" name="cf_admin_email" value="<?php echo esc_attr($seed_u ? $seed_u->user_email : ''); ?>" /></label>
+                                </div>
+                                <div class="cfse-actions">
+                                    <button type="submit" form="cfse-act-seed" class="button">👤 写入 Worker 后台用户</button>
+                                </div>
+                                <?php if (isset($_GET['seeded']) && $_GET['seeded'] === '1'): ?>
+                                    <div class="notice notice-success is-dismissible" style="margin:8px 0 0;"><p>✅ 已写入 D1。</p></div>
+                                <?php elseif (isset($_GET['seeded']) && $_GET['seeded'] === '0'): ?>
+                                    <div class="notice notice-error is-dismissible" style="margin:8px 0 0;"><p>❌ 失败：用户名无效或密码少于 8 位。</p></div>
+                                <?php endif; ?>
+                            </details>
+
+                            <details class="cfse-adv"<?php echo (isset($_GET['cfse_expand']) && $_GET['cfse_expand'] === 'deploy') ? ' open' : ''; ?>>
+                                <summary>🚀 部署 / 升级 CMS</summary>
+                                <?php
+                                $rel_ver = (string) get_option('cf_cms_release_version', '');
+                                $rel_src = (string) get_option('cf_cms_release_source', '');
+                                $rel_src_info = CFSE_Sync_Release::get_instance()->resolve_source_dir();
+                                ?>
+                                <p class="description">
+                                    <?php if (!empty($rel_src_info['ready'])): ?>
+                                        ✅ 发行包 <strong><?php echo esc_html($rel_ver !== '' ? $rel_ver : '已下载'); ?></strong>
+                                        <?php if ($rel_src !== ''): ?><span style="color:#999;">（来自 <?php echo esc_html($rel_src); ?>）</span><?php endif; ?>
+                                    <?php else: ?>
+                                        ⚠️ 还没下载发行包
+                                    <?php endif; ?>
+                                </p>
+                                <div class="cfse-actions">
+                                    <button type="submit" form="cfse-act-download" class="button">⬇️ 下载发行包</button>
+                                    <button type="submit" form="cfse-act-deploy" class="button button-primary" onclick="return confirm('把 CMS 发行包部署到 Cloudflare？需本机已登录 wrangler。')">🚀 部署到 Cloudflare</button>
+                                </div>
+                                <?php if (isset($_GET['release_dl'])): ?>
+                                    <?php if ($_GET['release_dl'] === '1'): ?>
+                                        <div class="notice notice-success is-dismissible" style="margin:8px 0;"><p>✅ 已下载并解压。</p></div>
+                                    <?php else: ?>
+                                        <div class="notice notice-error is-dismissible" style="margin:8px 0;">
+                                            <p>❌ 下载失败<?php if (!empty($_GET['release_error'])): ?>：<?php echo esc_html(wp_unslash($_GET['release_error'])); ?><?php endif; ?></p>
+                                        </div>
+                                    <?php endif; ?>
+                                <?php endif; ?>
+                                <table class="form-table cfse-table">
+                                    <tr><th><label for="cf_cms_github_repo">GitHub 仓库</label></th>
+                                        <td><input type="text" id="cf_cms_github_repo" name="cf_cms_github_repo" value="<?php echo esc_attr(get_option('cf_cms_github_repo', CFSE_Sync_Release::DEFAULT_GITHUB_REPO)); ?>" style="width:100%;max-width:320px;" placeholder="owner/repo" />
+                                            <p class="description">首选下载源（Releases 最新版）</p></td></tr>
+                                    <tr><th><label for="cf_cms_package_url">官网地址</label></th>
+                                        <td><input type="url" id="cf_cms_package_url" name="cf_cms_package_url" value="<?php echo esc_attr(get_option('cf_cms_package_url', CFSE_Sync_Release::DEFAULT_SITE_URL)); ?>" style="width:100%;max-width:320px;" />
+                                            <p class="description">备选下载源</p></td></tr>
+                                </table>
+                            </details>
+                        </div>
+
+                        <div class="cfse-savebar">
+                            <button type="submit" class="button button-primary button-hero">保存配置</button>
+                        </div>
+                    </div><!-- /.cfse-col-main -->
+
+                    <aside class="cfse-col cfse-col-side">
+                        <div class="cfse-card">
+                            <h2>📊 状态面板</h2>
+                            <div class="cfse-stats">
+                                <div class="stat-item"><span class="stat-label">总文章</span><span class="stat-value"><?php echo esc_html($stats['total_posts']); ?></span></div>
+                                <div class="stat-item"><span class="stat-label">已同步</span><span class="stat-value"><?php echo esc_html($stats['exported_posts']); ?></span></div>
+                                <div class="stat-item"><span class="stat-label">待同步</span><span class="stat-value"><?php echo esc_html($stats['pending_posts']); ?></span></div>
+                                <div class="stat-item"><span class="stat-label">最后同步</span><span class="stat-value"><?php echo esc_html($stats['last_export']); ?></span></div>
+                            </div>
+                            <div class="cfse-progress">
+                                <div class="progress-bar" style="width: <?php echo esc_attr($stats['progress']); ?>%;"><?php echo esc_html(round($stats['progress'], 1)); ?>%</div>
+                            </div>
+                        </div>
+
+                        <div class="cfse-card">
+                            <h2>📋 最近日志</h2>
+                            <pre class="cfse-log"><?php echo esc_html($this->get_recent_logs(10)); ?></pre>
+                        </div>
+                    </aside>
+                </div><!-- /.cfse-grid -->
+            </form>
+        </div><!-- /.wrap.cfse-settings -->
 
 <?php
 /*
@@ -317,27 +300,65 @@ class CFSE_Sync_Admin_UI {
 </div>
 
 <style>
-        .cfse-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 460px); gap: 20px; align-items: start; margin-top: 20px; align-items: start; }
-        .cfse-grid > .cfse-col { min-width: 0; }
-        .cfse-grid > .cfse-col > .cfse-card,
-        .cfse-grid > .cfse-col > form > .cfse-card { min-width: 0; }
+        /* ── 布局：左设置 / 右状态窗 ───────────────────────────── */
+        .cfse-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 20px; align-items: start; margin-top: 16px; }
+        .cfse-grid > .cfse-col { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
         .cfse-grid .cfse-card code, .cfse-grid .stat-value { overflow-wrap: anywhere; word-break: break-word; }
-        .cfse-card { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-        .cfse-card h2 { margin-top: 0; border-bottom: 2px solid #f0f0f0; padding-bottom: 10px; }
-        .cfse-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        .stat-item { background: #f8f9fa; padding: 15px; border-radius: 6px; text-align: center; }
-        .stat-label { display: block; color: #666; font-size: 12px; text-transform: uppercase; }
-        .stat-value { display: block; font-size: 24px; font-weight: bold; margin-top: 5px; }
-        .cfse-progress { margin: 15px 0; background: #f0f0f0; border-radius: 20px; overflow: hidden; }
-        .progress-bar { background: linear-gradient(90deg, #4CAF50, #8BC34A); color: #fff; padding: 8px 15px; text-align: right; font-size: 12px; transition: width 0.3s; }
-        .cfse-actions { display: flex; gap: 10px; margin: 15px 0; flex-wrap: wrap; }
-        .cfse-sec { border-top: 1px solid #f0f0f0; padding: 2px 0; }
-        .cfse-sec > h4 { font-weight: 600; }
-        .cfse-sec label { display: block; margin: 5px 0; }
-        .cfse-grp-sub { font-size: 13px; color: #646970; margin: 8px 0 2px; }
-        .cfse-logs pre { background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 6px; overflow: auto; max-height: 200px; font-size: 12px; line-height: 1.5; }
-        .version { font-size: 14px; color: #666; font-weight: normal; }
-        @media (max-width: 1200px) { .cfse-grid { grid-template-columns: 1fr; } }
+
+        /* 卡片：去阴影、留细边框，减少视觉噪音 */
+        .cfse-card { background: #fff; border: 1px solid #e2e4e7; border-radius: 8px; padding: 18px 20px; box-shadow: none; }
+        .cfse-card > h2 { margin: 0 0 12px; padding-bottom: 10px; border-bottom: 1px solid #f0f0f1; font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+        .cfse-side .cfse-card > h2 { font-size: 14px; }
+
+        .cfse-hint { margin: 0 0 12px; font-size: 13px; color: #646970; line-height: 1.6; }
+
+        /* 卡片内的分组 */
+        .cfse-sec + .cfse-sec { margin-top: 14px; padding-top: 14px; border-top: 1px dashed #f0f0f1; }
+        .cfse-sec > h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #787c82; text-transform: none; letter-spacing: .02em; }
+
+        /* 复选行：整行可点，行距一致 */
+        .cfse-check { display: block; margin: 0 0 6px; font-size: 13px; line-height: 1.7; }
+        .cfse-check:last-child { margin-bottom: 0; }
+        .cfse-check input { margin-right: 6px; }
+
+        .cfse-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0; }
+        .cfse-sec > .cfse-actions { margin-top: 2px; }
+        .cfse-actions .button { margin: 0; }
+        .cfse-fields { display: flex; flex-wrap: wrap; gap: 10px 14px; margin: 10px 0; font-size: 13px; }
+        .cfse-fields label { display: flex; align-items: center; gap: 6px; margin: 0; }
+
+        /* 参数表：紧凑，去掉 WP 默认的大行高 */
+        .cfse-table { margin: 0; }
+        .cfse-table tr > th { width: 120px; padding: 8px 10px 8px 0; font-weight: 500; font-size: 13px; color: #1d2327; }
+        .cfse-table tr > td { padding: 8px 0; font-size: 13px; }
+        .cfse-table .description { margin: 4px 0 0; font-size: 12px; }
+
+        /* 状态窗 */
+        .cfse-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .stat-item { background: #f6f7f7; border-radius: 6px; padding: 12px 10px; text-align: center; }
+        .stat-label { display: block; color: #646970; font-size: 11px; }
+        .stat-value { display: block; font-size: 20px; font-weight: 600; margin-top: 4px; }
+        .cfse-progress { margin: 12px 0 0; height: 8px; background: #f0f0f1; border-radius: 99px; overflow: hidden; }
+        .cfse-progress .progress-bar { height: 100%; background: #00a32a; border-radius: 99px; font-size: 0; padding: 0; }
+
+        .cfse-log { margin: 0; background: #f6f7f7; border-radius: 6px; padding: 12px; max-height: 260px; overflow: auto; font-size: 11.5px; line-height: 1.65; color: #3c434a; white-space: pre-wrap; word-break: break-word; }
+
+        .cfse-savebar { display: flex; justify-content: flex-end; }
+
+        .cfse-adv { margin: 0; border: 1px solid #e2e4e7; border-radius: 6px; background: #fafafa; }
+        .cfse-adv + .cfse-adv { margin-top: 10px; }
+        .cfse-adv > summary { cursor: pointer; padding: 10px 14px; font-size: 13px; font-weight: 500; list-style: none; }
+        .cfse-adv > summary::-webkit-details-marker { display: none; }
+        .cfse-adv > summary::before { content: '▸'; display: inline-block; width: 16px; color: #787c82; transition: transform .15s; }
+        .cfse-adv[open] > summary::before { transform: rotate(90deg); }
+        .cfse-adv[open] > summary { border-bottom: 1px solid #e2e4e7; }
+        .cfse-adv > *:not(summary) { margin-left: 14px; margin-right: 14px; }
+        .cfse-adv > *:not(summary):first-of-type { margin-top: 12px; }
+        .cfse-adv > *:not(summary):last-child { margin-bottom: 14px; }
+
+        .version { font-size: 13px; color: #646970; font-weight: normal; }
+
+        @media (max-width: 1100px) { .cfse-grid { grid-template-columns: 1fr; } }
         </style>
         <script>
         // 测试连接（状态机第二屏 + 连接卡片共用）
@@ -600,14 +621,14 @@ class CFSE_Sync_Admin_UI {
         $targets = $this->get_hosting_targets();
         $multi = count($targets) > 1;
         ?>
-        <table class="form-table" style="margin-top:6px;">
+        <table class="form-table cfse-table">
             <tr>
-                <th style="width:110px;"><label for="cfse_conn_endpoint">CMS 地址</label></th>
+                <th><label for="cfse_conn_endpoint">CMS 地址</label></th>
                 <td>
                     <input type="url" id="cfse_conn_endpoint" name="cf_site_url"
                         value="<?php echo esc_attr($p['endpoint']); ?>"
                         style="width:100%;max-width:460px;" placeholder="https://你的站点.workers.dev" />
-                    <p class="description">CMS 的对外地址。部署完 wrangler 会给你一个 <code>*.workers.dev</code> 地址（也可以绑自己的域名）。</p>
+                    <p class="description">wrangler 部署后给的地址，或你绑定的域名。</p>
                 </td>
             </tr>
             <tr>
@@ -616,11 +637,11 @@ class CFSE_Sync_Admin_UI {
                     <input type="password" id="cfse_conn_auth_key" name="cf_auth_key"
                         value="<?php echo esc_attr($p['auth_key']); ?>"
                         style="width:100%;max-width:460px;" autocomplete="off" placeholder="CMS 的同步密钥" />
-                    <p class="description">在 <b>CMS 后台 → ⚙️ 设置</b> 里能看到。用它鉴权，<b>别泄露</b>。</p>
+                    <p class="description">在 CMS 后台「⚙️ 设置」里查看。</p>
                 </td>
             </tr>
         </table>
-        <div class="cfse-hero-actions" style="margin-top:4px;">
+        <div class="cfse-actions" style="margin-top:4px;">
             <button type="button" class="button" id="cfse-test-conn-2">🔌 测试连接</button>
             <span id="cfse-test-conn-result-2" class="cfse-dim"></span>
         </div>
