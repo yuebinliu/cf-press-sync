@@ -75,6 +75,7 @@ $cfse_required_modules = array(
     'includes/class-transports.php',
     'includes/class-admin-ui.php',
     'includes/class-worker-cms.php',
+    'includes/class-release.php',
     'includes/class-compat.php',
 );
 $cfse_missing_modules = array();
@@ -97,6 +98,7 @@ if (!empty($cfse_missing_modules)) {
 require_once CFSE_PLUGIN_DIR . 'includes/class-transports.php';
 require_once CFSE_PLUGIN_DIR . 'includes/class-admin-ui.php';
 require_once CFSE_PLUGIN_DIR . 'includes/class-worker-cms.php';
+require_once CFSE_PLUGIN_DIR . 'includes/class-release.php';
 require_once CFSE_PLUGIN_DIR . 'includes/class-compat.php';
 // 上面几个临时变量会落到全局作用域，用完清掉
 unset($cfse_required_modules, $cfse_missing_modules, $cfse_mod);
@@ -207,6 +209,7 @@ class CFSE_Sync_Plugin {
 		add_action('admin_post_cf_clear_cache', array($this, 'handle_clear_cache'));
 		add_action('admin_post_cf_seed_admin', array($this, 'handle_seed_admin'));
 		add_action('admin_post_cf_deploy_worker', array($this, 'handle_deploy_worker'));
+		add_action('admin_post_cf_download_release', array($this, 'handle_download_release'));
 		add_filter('manage_posts_columns', array($this, 'add_export_column'));
 		add_action('manage_posts_custom_column', array($this, 'render_export_column'), 10, 2);
 		register_deactivation_hook(__FILE__, array($this, 'deactivate'));
@@ -1101,15 +1104,33 @@ public function handle_deploy_worker() {
     exit;
 }
 
+    /**
+     * 部署 Worker：把 CMS 发行包推上去（调用 wrangler）。
+     *
+     * 2026-10-25 改造：源码目录从「插件内嵌的 worker/ 副本」改为「已下载的发行包」。
+     *   理由：内嵌副本必然漂移（CMS 仓删了 documents.js / routes.template.js，
+     *   插件里的副本还在，部署一次就把已砍掉的功能推回线上 —— 2026-10-25 真发生过）。
+     *   发行包由 CMS 官方发布，版本永远与官方一致。
+     *
+     * 兼容：没有发行包时回落到内嵌副本，但会明确警告（见 resolve_source_dir）。
+     */
     private function deploy_worker() {
-        $worker_dir = CFSE_PLUGIN_DIR . 'worker';
+        $rel = CFSE_Sync_Release::get_instance();
+        $src = $rel->resolve_source_dir();
+        $worker_dir = $src['dir'];
+
         if (!is_dir($worker_dir)) {
-            $this->log('Worker 目录不存在: ' . $worker_dir, 'ERROR');
+            $this->log('Worker 源码目录不存在: ' . $worker_dir, 'ERROR');
             return false;
+        }
+        if ($src['source'] === '内嵌副本') {
+            $this->log($src['note'], 'WARNING');
+        } else {
+            $this->log('使用发行包源码：' . $worker_dir, 'INFO');
         }
 
         // 确保 assets 目录存在（wrangler [assets] directory 缺失会部署失败）
-        $static_dir = CFSE_PLUGIN_DIR . 'worker/static';
+        $static_dir = $worker_dir . '/static';
         if (!is_dir($static_dir)) {
             wp_mkdir_p($static_dir);
         }
@@ -1122,15 +1143,16 @@ public function handle_deploy_worker() {
             }
         }
 
-        // wrangler.toml 不进安装包（里面有账号级 ID）：首次部署时从 .example 生成一份，
+        // wrangler.toml 不进发行包（里面有账号级 ID）：首次部署时从 .example 生成一份，
         // 把插件设置里已经填好的 D1 / R2 名字代进去，剩下的（KV id / D1 库名）由用户补。
+        // ⚠️ toml 必须放在**发行包目录**里 —— wrangler 从工作目录读配置。
         $toml = $worker_dir . '/wrangler.toml';
         if (!file_exists($toml)) {
             $this->scaffold_wrangler_toml($toml);
         }
         $toml_text = file_exists($toml) ? (string) @file_get_contents($toml) : '';
         if (strpos($toml_text, 'REPLACE_WITH_YOUR_') !== false) {
-            $this->log('worker/wrangler.toml 还有 REPLACE_WITH_YOUR_* 未替换，部署已中止。请按文件顶部注释创建 D1 / KV / R2 并填入 ID。', 'ERROR');
+            $this->log('wrangler.toml 还有 REPLACE_WITH_YOUR_* 未替换，部署已中止。请按文件顶部注释创建 D1 / KV / R2 并填入 ID。', 'ERROR');
             return false;
         }
 
@@ -1148,8 +1170,45 @@ public function handle_deploy_worker() {
             }
         }
 
-        $this->log('exec 函数不可用，请手动部署: cd worker && npx wrangler deploy', 'WARNING');
+        $this->log('exec 函数不可用，请手动部署: cd ' . $worker_dir . ' && npx wrangler deploy', 'WARNING');
         return false;
+    }
+
+
+    /**
+     * 下载 CMS 发行包（双源：GitHub Releases → 官网 → 固定 workers.dev 地址）。
+     *
+     * WP 后台「高级 → 部署 CMS」里的第一步。下载完解压到 cms-package/cf-cms/，
+     * 之后的「部署」会用它推上去。
+     */
+    public function handle_download_release() {
+        if (!current_user_can('manage_options')) wp_die('权限不足');
+        check_admin_referer('cf_download_release');
+        @set_time_limit(300);
+
+        $rel = CFSE_Sync_Release::get_instance();
+        $res = $rel->download();
+
+        if (empty($res['ok'])) {
+            wp_redirect(add_query_arg('release_dl', '0', admin_url('options-general.php?page=cfse-sync&release_error=' . rawurlencode($res['error']))));
+            exit;
+        }
+
+        // 解压到 cms-package/cf-cms/
+        $ex = $rel->extract($res['path'], $rel->source_dir());
+        if (empty($ex['ok'])) {
+            wp_redirect(add_query_arg('release_dl', '0', admin_url('options-general.php?page=cfse-sync&release_error=' . rawurlencode($ex['error']))));
+            exit;
+        }
+
+        // 记下版本，UI 上显示
+        update_option('cf_cms_release_version', $res['version']);
+        update_option('cf_cms_release_source', $res['source']);
+        update_option('cf_cms_release_time', time());
+
+        $this->log('CMS 发行包就绪：版本 ' . $res['version'] . '（来源：' . $res['source'] . '，' . $ex['files'] . ' 个文件）', 'INFO');
+        wp_redirect(add_query_arg('release_dl', '1', admin_url('options-general.php?page=cfse-sync')));
+        exit;
     }
 
     /**
@@ -1157,9 +1216,13 @@ public function handle_deploy_worker() {
      * D1 database_id / R2 bucket_name 代进去（KV namespace id 无从得知，留给用户填）。
      */
     private function scaffold_wrangler_toml($toml) {
-        $example = CFSE_PLUGIN_DIR . 'worker/wrangler.toml.example';
+        // wrangler.toml.example 的位置随「源码目录」变（发行包 or 内嵌副本）
+        $example = dirname($toml) . '/wrangler.toml.example';
         if (!file_exists($example)) {
-            $this->log('缺少 worker/wrangler.toml.example，无法生成部署配置', 'ERROR');
+            $example = CFSE_PLUGIN_DIR . 'worker/wrangler.toml.example';
+        }
+        if (!file_exists($example)) {
+            $this->log('缺少 wrangler.toml.example，无法生成部署配置', 'ERROR');
             return false;
         }
         $text = (string) @file_get_contents($example);

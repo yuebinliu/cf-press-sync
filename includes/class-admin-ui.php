@@ -406,21 +406,48 @@ class CFSE_Sync_Admin_UI {
         </div>
 
         <div style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">
-                        <h4 style="margin-top:0;">🔧 Worker 代码管理</h4>
+                        <h4 style="margin-top:0;">🚀 部署 CMS</h4>
                         <p class="description">
-                            本地 Worker 代码位于 <code><?php echo esc_html(CFSE_WORKER_DIR); ?></code>
-                            <?php if ($routes_exists): ?>✅ routes.js<?php else: ?>❌ routes.js<?php endif; ?>
-                            <?php if ($templates_exists): ?>✅ template-engine.js<?php else: ?>❌ template-engine.js<?php endif; ?>
+                            插件不再内嵌 Worker 源码副本 —— 部署时用的是**从 CMS 官方下载的发行包**，
+                            这样插件里的代码永远不会和官方版本漂移。
                         </p>
+                        <?php
+                        $rel_ver = (string) get_option('cf_cms_release_version', '');
+                        $rel_src = (string) get_option('cf_cms_release_source', '');
+                        $rel_src_info = CFSE_Sync_Release::get_instance()->resolve_source_dir();
+                        ?>
+                        <p class="description" style="margin-top:6px;">
+                            当前源码来源：
+                            <?php if ($rel_src_info['source'] === '发行包'): ?>
+                                ✅ 发行包 <strong><?php echo esc_html($rel_ver !== '' ? $rel_ver : '已下载'); ?></strong>
+                                <?php if ($rel_src !== ''): ?><span style="color:#999;">（来自 <?php echo esc_html($rel_src); ?>）</span><?php endif; ?>
+                            <?php else: ?>
+                                ⚠️ <strong>尚未下载发行包</strong> —— 现在用的是插件内嵌的旧副本，可能与官方不一致
+                            <?php endif; ?>
+                        </p>
+                        <?php if (isset($_GET['release_dl'])): ?>
+                            <?php if ($_GET['release_dl'] === '1'): ?>
+                                <div class="notice notice-success is-dismissible" style="margin:8px 0;"><p>✅ CMS 发行包已下载并解压，可以点「部署」了。</p></div>
+                            <?php else: ?>
+                                <div class="notice notice-error is-dismissible" style="margin:8px 0;">
+                                    <p>❌ 下载失败<?php if (!empty($_GET['release_error'])): ?>：<?php echo esc_html(wp_unslash($_GET['release_error'])); ?><?php endif; ?></p>
+                                </div>
+                            <?php endif; ?>
+                        <?php endif; ?>
                         <div style="margin: 10px 0; display: flex; gap: 10px; flex-wrap: wrap;">
+                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_download_release')); ?>" style="display:inline;">
+                                <?php wp_nonce_field('cf_download_release'); ?>
+                                <button type="submit" class="button">⬇️ 下载 CMS 发行包</button>
+                            </form>
                             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_deploy_worker')); ?>" style="display:inline;">
                                 <?php wp_nonce_field('cf_deploy_worker'); ?>
-                                <button type="submit" class="button button-primary" onclick="return confirm('用本机 wrangler 把 worker/ 目录部署到 Cloudflare？需本机已登录 wrangler。')">🚀 部署 Worker</button>
+                                <button type="submit" class="button button-primary" onclick="return confirm('把 CMS 发行包部署到 Cloudflare？需本机已登录 wrangler。')">🚀 部署到 Cloudflare</button>
                             </form>
                         </div>
                         <p class="description" style="font-size:12px;color:#999;">
-                            💡 模板与风格由 Worker 后台的「🎨 模板编辑器」维护（存 R2 <code>wp-content/themes/&lt;id&gt;/tpl.json</code>），插件侧不再打包模板。
-                            「部署 Worker」会把 <code>worker/src</code> + <code>worker/static</code> 一起推上去，改完代码点一次即可。
+                            下载源（按顺序尝试）：GitHub Releases → 官网 <code><?php echo esc_html(get_option('cf_cms_package_url', CFSE_Sync_Release::DEFAULT_SITE_URL)); ?></code> → 固定生产地址。
+                            官网地址可在下方「基础配置」里改。<br/>
+                            💡 模板与风格由 Worker 后台的「🎨 模板编辑器」维护（存 R2 <code>wp-content/themes/&lt;id&gt;/tpl.json</code>），插件侧不打包模板。
                         </p>
                     </div>
     </div>
@@ -460,6 +487,12 @@ class CFSE_Sync_Admin_UI {
                                     <p class="description">首页/分类/标签/归档每页显示多少篇（默认与 WP「设置→阅读」一致 = 10）。<b>此项已由 CMS 后台接管</b>（D1 settings k='cache'），此处仅为 WP 侧参考值。</p></td></tr>
                             <tr><th><label for="cf_max_retries">写入重试次数</label></th>
                                 <td><input type="number" id="cf_max_retries" name="cf_max_retries" value="<?php echo esc_attr($this->config['max_retries']); ?>" style="width:100px" min="1" /></td></tr>
+                            <tr><th><label for="cf_cms_package_url">CMS 发行包官网地址</label></th>
+                                <td><input type="url" id="cf_cms_package_url" name="cf_cms_package_url" value="<?php echo esc_attr(get_option('cf_cms_package_url', CFSE_Sync_Release::DEFAULT_SITE_URL)); ?>" style="width:320px" />
+                                    <p class="description">下载发行包的第二个来源。默认 <code><?php echo esc_html(CFSE_Sync_Release::DEFAULT_SITE_URL); ?></code>；将来有正式域名了改这里即可，代码不用动。</p></td></tr>
+                            <tr><th><label for="cf_cms_github_repo">CMS GitHub 仓库</label></th>
+                                <td><input type="text" id="cf_cms_github_repo" name="cf_cms_github_repo" value="<?php echo esc_attr(get_option('cf_cms_github_repo', CFSE_Sync_Release::DEFAULT_GITHUB_REPO)); ?>" style="width:320px" placeholder="owner/repo" />
+                                    <p class="description">发行包的第一个下载源（GitHub Releases 最新版）。格式 <code>owner/repo</code>。</p></td></tr>
                             <tr><th>日志与调试</th>
                                 <td>
                                     <label><input type="checkbox" name="cf_enable_logging" value="1" <?php checked($this->config['enable_logging']); ?> /> 启用日志</label><br/>
@@ -540,6 +573,11 @@ class CFSE_Sync_Admin_UI {
             'cf_comments_accept' => array('sanitize' => 'sanitize_text_field', 'default' => 'off'),
             // 定时把 Worker 端评论拉回 WP（默认开；否则 WP 后台看不到读者评论）
             'cf_comments_pull_cron' => array('sanitize' => 'boolval', 'default' => 1),
+            // CMS 发行包的下载源（方案 B 双源）
+            //   cf_cms_package_url —— 官网地址（CMS 官方把 tar.gz 挂在自己站上）
+            //   cf_cms_github_repo —— GitHub 仓库 owner/name，用于查 Releases 的最新资产
+            'cf_cms_package_url' => array('sanitize' => 'esc_url_raw', 'default' => CFSE_Sync_Release::DEFAULT_SITE_URL),
+            'cf_cms_github_repo' => array('sanitize' => 'sanitize_text_field', 'default' => CFSE_Sync_Release::DEFAULT_GITHUB_REPO),
             'cf_banner_url' => array('sanitize' => 'esc_url_raw', 'default' => ''),
             'cf_logo_url'   => array('sanitize' => 'esc_url_raw', 'default' => ''),
         );
