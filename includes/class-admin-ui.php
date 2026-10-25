@@ -158,18 +158,16 @@ class CFSE_Sync_Admin_UI {
                             <h2>⚙️ 基础参数</h2>
                             <?php settings_fields('cf_static_export_pro'); ?>
                             <table class="form-table cfse-table">
-                                <tr><th><label for="cf_batch_size">批量大小</label></th>
+                                <tr><th><label for="cf_batch_size">定时同步每批篇数</label></th>
                                     <td><input type="number" id="cf_batch_size" name="cf_batch_size" value="<?php echo esc_attr($this->config['batch_size']); ?>" class="small-text" min="1" />
-                                        <p class="description">定时任务每次处理多少篇</p></td></tr>
+                                        <p class="description">只影响每日定时任务；「全量同步」按钮不受此限。</p></td></tr>
                                 <tr><th><label for="cf_max_retries">写入重试次数</label></th>
-                                    <td><input type="number" id="cf_max_retries" name="cf_max_retries" value="<?php echo esc_attr($this->config['max_retries']); ?>" class="small-text" min="1" /></td></tr>
-                                <tr><th><label for="cf_posts_per_page">列表每页文章数</label></th>
-                                    <td><input type="number" id="cf_posts_per_page" name="cf_posts_per_page" value="<?php echo esc_attr($this->config['posts_per_page']); ?>" class="small-text" min="1" />
-                                        <p class="description">仅 WP 侧参考值；前台列表分页由 <b>CMS 后台</b>控制。</p></td></tr>
+                                    <td><input type="number" id="cf_max_retries" name="cf_max_retries" value="<?php echo esc_attr($this->config['max_retries']); ?>" class="small-text" min="1" />
+                                        <p class="description">D1 写入失败时的重试次数。</p></td></tr>
                                 <tr><th>日志</th>
                                     <td>
-                                        <label class="cfse-check"><input type="checkbox" name="cf_enable_logging" value="1" <?php checked($this->config['enable_logging']); ?> /> 启用</label>
-                                        <label class="cfse-check"><input type="checkbox" name="cf_debug_mode" value="1" <?php checked($this->config['debug_mode']); ?> /> 调试模式</label>
+                                        <label class="cfse-check"><input type="checkbox" name="cf_enable_logging" value="1" <?php checked($this->config['enable_logging']); ?> /> 启用（关掉后右侧「最近日志」不再更新）</label>
+                                        <label class="cfse-check"><input type="checkbox" name="cf_debug_mode" value="1" <?php checked($this->config['debug_mode']); ?> /> 调试模式（把上传的 HTML 另存到本地，排查模板问题用）</label>
                                     </td></tr>
                             </table>
                         </div>
@@ -424,8 +422,9 @@ class CFSE_Sync_Admin_UI {
             'cf_enable_logging' => array('sanitize' => 'boolval', 'default' => true),
             'cf_debug_mode' => array('sanitize' => 'boolval', 'default' => false),
             'cf_auth_key' => array('sanitize' => 'sanitize_text_field', 'default' => ''),
-            // 列表每页文章数（默认取 WP「设置→阅读」的 posts_per_page，即 10）
-            'cf_posts_per_page' => array('sanitize' => 'intval', 'default' => 10),
+            // 列表每页文章数已在 2026-10-26 移除：该 option 只被设置页自己的输入框读过，
+            // 前台列表分页由 CMS 后台（D1 settings k='cache'.per_page）控制，WP 侧这个值不产生任何效果。
+            // 保留 uninstall.php 里的清理项，只是为了让老用户卸载时能把这个孤儿 option 清掉。
             'cf_worker_auto_check' => array('sanitize' => 'boolval', 'default' => true),
             'cf_sync_d1' => array('sanitize' => 'boolval', 'default' => 0),
             // 多托管目标（JSON 字符串；sanitize 负责把表单数组转成 JSON）

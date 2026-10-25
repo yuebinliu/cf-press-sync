@@ -83,7 +83,7 @@ def main(path):
                 names.add(i.get('name'))
         need = [
             'cf_site_url', 'cf_auth_key',
-            'cf_batch_size', 'cf_posts_per_page', 'cf_max_retries',
+            'cf_batch_size', 'cf_max_retries',
             'cf_cms_package_url', 'cf_cms_github_repo',
             'cf_enable_logging', 'cf_debug_mode',
         ]

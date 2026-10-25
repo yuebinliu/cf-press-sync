@@ -247,7 +247,7 @@ class CFSE_Sync_Plugin {
             // 缓存策略（TTL / feed 条数 / 发布后清缓存）已全部归 CMS 后台维护
             // （D1 settings k='cache' 行）；WP 侧不再读写这些 option，也不再清 KV 缓存。
             'auth_key' => $primary_key,
-            'posts_per_page' => max(1, (int) get_option('cf_posts_per_page', 10)),
+            // posts_per_page 已废弃（2026-10-26）：没有消费方，前台分页归 CMS 后台。
             // 编辑页是否自动比对 Worker 版本（默认关；打开后打开编辑页即查询，关则用面板里的「🔍 检查」按钮）
             'worker_auto_check' => (bool) get_option('cf_worker_auto_check', true),
             // 发布文章时自动把数据同步到 D1（旧键 cf_sync_drafts 作为默认值兼容迁移）。
