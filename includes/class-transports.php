@@ -4,7 +4,7 @@
  *
  * 本插件只面向「自托管 CMS（Cloudflare Worker + R2 + D1）」这一条链路：
  *   · cloudflare —— 写 D1（/d1-batch）、写 R2（/upload、/delete）、读站点配置
- *   · s3         —— 通用 S3 兼容对象存储（只存文件，不含 D1）
+ *   · （其余 provider 归 WP Static Deploy 插件，本插件只对接 CMS）
  * 第三方静态托管（GitHub Pages / GitLab / Netlify / Vercel / FTP / WebDAV / 本地目录）
  * 全部归另一个插件 WP Static Deploy，这里不再实现。
  *
@@ -36,228 +36,15 @@ class CFSE_Sync_Transports {
     private function __construct() {
     }
 
-    /**
-     * S3 用的 URI 编码（SigV4 规范）：字母数字与 -_.~ 原样；'/' 视参数决定是否编码；
-     * **已 percent-encoded 的 %xx 原样保留**（规范化成大写）—— 我们的 R2 key 里中文/空格就是这种形态，
-     * 若把它二次编码成 %25xx 会导致签名与实际对象名不一致。
-     */
-    public function sigv4_uri_encode($s, $encode_slash = true) {
-        $out = '';
-        $len = strlen($s);
-        for ($i = 0; $i < $len; $i++) {
-            $c = $s[$i];
-            if (ctype_alnum($c) || $c === '-' || $c === '_' || $c === '.' || $c === '~') {
-                $out .= $c;
-            } elseif ($c === '/') {
-                $out .= $encode_slash ? '%2F' : '/';
-            } else {
-                // 注：`%` 一律编码为 `%25`（RFC 3986）。此前有一版把已编码的 `%xx` 原样保留（批BO 的离线
-                // 推断：以为 R2 对象名就是小写 %xx），但真机实测：含 `%` 的 key 会 403 SignatureDoesNotMatch
-                // （canonical URI 与服务端重算不一致）。真正的对象名用 rawurldecode() 还原，见 s3_request()。
-                $out .= '%' . strtoupper(bin2hex($c));
-            }
-        }
-        return $out;
-    }
-
-    /** canonical query string：按 key 升序 + 各自 URI 编码 */
-    public function sigv4_canonical_query($query) {
-        if (empty($query) || !is_array($query)) return '';
-        ksort($query);
-        $parts = array();
-        foreach ($query as $k => $v) {
-            $parts[] = $this->sigv4_uri_encode((string) $k, true) . '=' . $this->sigv4_uri_encode((string) $v, true);
-        }
-        return implode('&', $parts);
-    }
-
-    /** 从 target 解析 S3 连接参数 */
-    public function s3_creds($target) {
-        $endpoint = rtrim(isset($target['endpoint']) ? (string) $target['endpoint'] : '', '/');
-        $parts = $endpoint !== '' ? parse_url($endpoint) : array();
-        $host = isset($parts['host']) ? $parts['host'] : '';
-        if ($host !== '' && !empty($parts['port'])) $host .= ':' . $parts['port'];
-        return array(
-            'endpoint' => $endpoint,
-            'scheme' => !empty($parts['scheme']) ? $parts['scheme'] : 'https',
-            'host' => $host,
-            'bucket' => isset($target['bucket']) ? trim((string) $target['bucket'], '/') : '',
-            'region' => !empty($target['region']) ? (string) $target['region'] : 'auto',
-            'access_key' => isset($target['access_key']) ? (string) $target['access_key'] : '',
-            'secret_key' => isset($target['secret_key']) ? (string) $target['secret_key'] : '',
-            'path_style' => $this->s3_path_style($target, $host),
-            'path_prefix' => isset($target['path_prefix']) ? trim((string) $target['path_prefix'], '/') : '',
-            'public_url' => rtrim(isset($target['public_url']) ? (string) $target['public_url'] : '', '/'),
-        );
-    }
-
-    /**
-     * 寻址方式：auto（默认，按 endpoint 判断）/ path（/bucket/key）/ virtual（bucket.host/key）。
-     * auto 规则：R2 存储端点、localhost、IP、带端口的 ⇒ path-style；*.amazonaws.com ⇒ virtual-host；其它自定义域名 ⇒ virtual-host（AWS 惯例），可用显式值覆盖。
-     */
-    public function s3_path_style($target, $host) {
-        $mode = isset($target['path_style']) ? (string) $target['path_style'] : 'auto';
-        if ($mode === 'path') return true;
-        if ($mode === 'virtual') return false;
-        $h = strtolower((string) $host);
-        if ($h === '') return true;
-        if (strpos($h, 'r2.cloudflarestorage.com') !== false) return true;
-        if (strpos($h, 'amazonaws.com') !== false) return false;
-        if (strpos($h, 'localhost') !== false) return true;
-        if (preg_match('/^\d+\.\d+\.\d+\.\d+/', $h)) return true;
-        if (strpos($h, ':') !== false) return true;
-        return false;
-    }
-
-    /** S3 错误分类：把 HTTP+返回体归成可读的 code / hint（供 UI 直接提示） */
-    public function s3_classify($code, $text) {
-        $x = strtolower((string) $text);
-        if ($code >= 200 && $code < 300) return array('code' => 'ok', 'hint' => '连通且签名通过');
-        if ($code === 301 || $code === 307) return array('code' => 'wrong_region', 'hint' => '被重定向（region 或寻址方式不对；R2 请把 region 填 auto）');
-        if ($code === 401) return array('code' => 'unauthorized', 'hint' => '凭证被拒（401）：access_key 不存在或已失效。R2 对未知 AK 直接返回 401；AK 存在但 secret 不对通常是 403 SignatureDoesNotMatch');
-        if ($code === 403 && strpos($x, 'signaturedoesnotmatch') !== false) return array('code' => 'signature_mismatch', 'hint' => 'Access Key / Secret Key 不对，或 region 与实际不符');
-        if ($code === 403 && (strpos($x, 'accessdenied') !== false || strpos($x, 'forbidden') !== false)) return array('code' => 'access_denied', 'hint' => '凭证能通过签名但无权限（检查该 Key 对本 bucket 的权限；若只是不能列举，上传通常仍可用）');
-        if ($code === 403) return array('code' => 'forbidden', 'hint' => '被拒（403）：多为签名或权限问题，见 detail');
-        if ($code === 404 && strpos($x, 'nosuchbucket') !== false) return array('code' => 'no_such_bucket', 'hint' => 'bucket 名不对（或 region 不对）');
-        if ($code === 404) return array('code' => 'not_found', 'hint' => '对象不存在（读对象时正常；上传时出现说明 bucket/path_prefix 有问题）');
-        if ($code === 400 && strpos($x, 'authorizationheader') !== false) return array('code' => 'bad_auth_header', 'hint' => '签名头格式错误（endpoint 是否多带了路径？应只填域名）');
-        if ($code === 400 && strpos($x, 'invalidargument') !== false && (strpos($x, 'access key') !== false || strpos($x, 'credential') !== false)) {
-            return array('code' => 'bad_credential', 'hint' => 'access_key 格式不对（R2 的 S3 Access Key 为 32 位；请用 R2 → Manage API Tokens 里创建的「S3 凭证」，不要用 Global API Token）');
-        }
-        if ($code === 400 && strpos($x, 'region') !== false) return array('code' => 'wrong_region', 'hint' => 'region 不对（R2 一般填 auto）');
-        if ($code === 400) return array('code' => 'bad_request', 'hint' => '请求被拒（400）：可能是「寻址方式」不对，改成 path 或 virtual 再试');
-        if ($code === 501 || $code === 411) return array('code' => 'unsupported', 'hint' => '该存储不支持这个请求（HTTP ' . $code . '）');
-        return array('code' => 'http_' . $code, 'hint' => 'HTTP ' . $code . '，见 detail 里的返回体');
-    }
-
-    /**
-     * 对 s3 目标发一次签名请求（自动按 path_style 决定 bucket 放 host 还是路径）。
-     * @return array {ok, http, code, hint, detail}
-     */
-    public function s3_request($target, $method, $key = '', $query = array(), $body = '', $content_type = '') {
-        $c = $this->s3_creds($target);
-        if ($c['host'] === '') return array('ok' => false, 'http' => 0, 'code' => 'config', 'hint' => 'endpoint 未填写或不合法（应形如 https://<account>.r2.cloudflarestorage.com）', 'detail' => '');
-        if ($c['bucket'] === '') return array('ok' => false, 'http' => 0, 'code' => 'config', 'hint' => 'bucket 未填写', 'detail' => '');
-        if ($c['access_key'] === '' || $c['secret_key'] === '') return array('ok' => false, 'http' => 0, 'code' => 'config', 'hint' => 'access_key / secret_key 未填写', 'detail' => '');
-
-        $full_key = $c['path_prefix'] !== '' ? ($c['path_prefix'] . '/' . ltrim((string) $key, '/')) : ltrim((string) $key, '/');
-        // 对象名 = 解码后的原文：本地产物路径是 URL 形态（中文 slug 呈现为小写 %xx），而对象存储里
-        // 真正存的是解码后的字符串。这样 (1) 签名一致、(2) 浏览器访问 /%xx/ 时服务端解码后能命中。
-        $full_key = rawurldecode($full_key);
-        $host = $c['path_style'] ? $c['host'] : ($c['bucket'] . '.' . $c['host']);
-        $path = $c['path_style']
-            ? ('/' . $c['bucket'] . ($full_key !== '' ? '/' . $full_key : ''))
-            : ('/' . $full_key);
-        $creds = array(
-            'access_key' => $c['access_key'], 'secret_key' => $c['secret_key'],
-            'region' => $c['region'], 'service' => 's3', 'host' => $host,
-        );
-        $signed = $this->sigv4_sign($creds, $method, $path, $query, $body);
-        $url = $c['scheme'] . '://' . $host . $this->sigv4_uri_encode($path, false)
-            . (!empty($query) ? ('?' . $this->sigv4_canonical_query($query)) : '');
-        $headers = array(
-            'Authorization' => $signed['authorization'],
-            'x-amz-date' => $signed['x-amz-date'],
-            'x-amz-content-sha256' => $signed['payload_hash'],
-        );
-        if ($content_type !== '') $headers['Content-Type'] = $content_type;
-        $resp = wp_remote_request($url, array(
-            'method' => $method, 'timeout' => 60, 'sslverify' => false, 'headers' => $headers, 'body' => $body,
-        ));
-        if (is_wp_error($resp)) {
-            $msg = $resp->get_error_message();
-            $is_timeout = (strpos($msg, 'timed out') !== false || strpos($msg, 'error 28') !== false);
-            return array(
-                'ok' => false, 'http' => 0,
-                'code' => $is_timeout ? 'timeout' : 'network',
-                'hint' => ($is_timeout ? '请求超时（检查 endpoint 与网络出口）：' : '网络不可达：') . $msg,
-                'detail' => '',
-            );
-        }
-        $code = (int) wp_remote_retrieve_response_code($resp);
-        $text = (string) wp_remote_retrieve_body($resp);
-        $cls = $this->s3_classify($code, $text);
-        return array(
-            'ok' => ($code >= 200 && $code < 300),
-            'http' => $code,
-            'code' => $cls['code'],
-            'hint' => $cls['hint'],
-            // 成功响应（如 ListObjects 的 XML）原样返回，便于列举/诊断；错误响应压缩空白并截断，避免日志爆炸。
-            'detail' => ($code >= 200 && $code < 300) ? $text : mb_substr(preg_replace('/\s+/', ' ', $text), 0, 300),
-        );
-    }
-
-    /**
-     * S3 连通性 + 签名自检：ListObjectsV2（max-keys=1）
-     *   200 ⇒ 连通、签名、bucket、列举权限全对；
-     *   403 SignatureDoesNotMatch ⇒ 凭证/region 错；403 AccessDenied ⇒ 无列举权限（上传可能仍可用）；
-     *   404 NoSuchBucket ⇒ bucket 名错。
-     */
-    public function s3_test_connection($target) {
-        return $this->s3_request($target, 'GET', '', array('list-type' => '2', 'max-keys' => '1'));
-    }
-
-    /**
-     * AWS Signature V4 签名（用于 S3 兼容对象存储：R2 / AWS S3 / MinIO / B2 等）。
-     *
-     * @param array  $creds   {access_key, secret_key, region, service(默认 s3), host}
-     * @param string $method  GET / PUT / DELETE …
-     * @param string $path    canonical 路径（path-style 时含 /bucket；不含 query）
-     * @param array  $query   查询参数 [k => v]
-     * @param string $payload 请求体（用于算 payload hash；GET/DELETE 传 ''）
-     * @param string $date    20150830T123600Z；默认取当前 UTC
-     * @param bool   $sign_content_sha 是否把 x-amz-content-sha256 计入签名头
-     *        （真实 S3/R2 请求建议签；AWS 官方 get-vanilla 向量只签 host 与 x-amz-date，自检时传 false）
-     * @return array 含 authorization / x-amz-date / payload_hash / canonical_request / string_to_sign / signature
-     */
-    public function sigv4_sign($creds, $method, $path, $query = array(), $payload = '', $date = null, $sign_content_sha = true) {
-        $ak = isset($creds['access_key']) ? (string) $creds['access_key'] : '';
-        $sk = isset($creds['secret_key']) ? (string) $creds['secret_key'] : '';
-        $region = !empty($creds['region']) ? (string) $creds['region'] : 'us-east-1';
-        $service = !empty($creds['service']) ? (string) $creds['service'] : 's3';
-        $host = isset($creds['host']) ? (string) $creds['host'] : '';
-        if ($date === null) $date = gmdate('Ymd\THis\Z');
-        $date_stamp = substr($date, 0, 8);
-
-        $payload_hash = hash('sha256', (string) $payload);
-        $canonical_uri = $this->sigv4_uri_encode($path, false);
-        $canonical_query = $this->sigv4_canonical_query($query);
-        // 参与的签名头（按字典序）；是否包含 x-amz-content-sha256 由参数决定
-        $sign_headers = array('host' => $host, 'x-amz-date' => $date);
-        if ($sign_content_sha) $sign_headers['x-amz-content-sha256'] = $payload_hash;
-        ksort($sign_headers);
-        $canonical_headers = '';
-        foreach ($sign_headers as $hk => $hv) $canonical_headers .= $hk . ':' . $hv . "\n";
-        $signed_headers = implode(';', array_keys($sign_headers));
-        $canonical_request = $method . "\n" . $canonical_uri . "\n" . $canonical_query . "\n"
-            . $canonical_headers . "\n" . $signed_headers . "\n" . $payload_hash;
-
-        $scope = $date_stamp . '/' . $region . '/' . $service . '/aws4_request';
-        $string_to_sign = "AWS4-HMAC-SHA256\n" . $date . "\n" . $scope . "\n" . hash('sha256', $canonical_request);
-
-        $k_date = hash_hmac('sha256', $date_stamp, 'AWS4' . $sk, true);
-        $k_region = hash_hmac('sha256', $region, $k_date, true);
-        $k_service = hash_hmac('sha256', $service, $k_region, true);
-        $k_signing = hash_hmac('sha256', 'aws4_request', $k_service, true);
-        $signature = hash_hmac('sha256', $string_to_sign, $k_signing);
-
-        return array(
-            'authorization' => 'AWS4-HMAC-SHA256 Credential=' . $ak . '/' . $scope
-                . ', SignedHeaders=' . $signed_headers . ', Signature=' . $signature,
-            'x-amz-date' => $date,
-            'payload_hash' => $payload_hash,
-            'canonical_request' => $canonical_request,
-            'string_to_sign' => $string_to_sign,
-            'signature' => $signature,
-        );
-    }
-
-    /** local 类型目标的根目录（未配置则用 CFSE_LOCAL_DIR） */
-    public function target_dir($target) {
-        $dir = (isset($target['dir']) && $target['dir'] !== '') ? (string) $target['dir'] : CFSE_LOCAL_DIR;
-        return rtrim($dir, '/\\');
-    }
-
+    
+    
+    
+    
+    
+    
+    
+    
+    
     /** 目标类型（默认 cfse-worker） */
     public function target_type($target) {
         return isset($target['type']) ? (string) $target['type'] : 'cfse-worker';
@@ -286,9 +73,8 @@ class CFSE_Sync_Transports {
 
     /**
      * 目标上某个 key 的**公开访问地址**（public_url 的正确用法）：
-     *   s3      ⇒ 优先 public_url；未配置则回退 endpoint/bucket（一般不可直接访问，仅作参考）
-     *   local   ⇒ 优先 public_url（若本地目录被 web 服务托管）；否则给 file:// 路径
-     *   worker  ⇒ 返回空串（公开地址由 Worker 侧决定，不在这里猜）
+     *   worker  ⇒ 优先 public_url（用户配了就用）；未配置返回空串
+     *              （公开地址由 Worker 侧决定，不在这里猜）
      * 会带上该目标的 path_prefix。
      */
     public function target_public_url($target, $key) {
@@ -298,12 +84,6 @@ class CFSE_Sync_Transports {
         $p = ($prefix !== '' ? $prefix . '/' : '') . ltrim((string) $key, '/');
         $pub = rtrim(isset($target['public_url']) ? (string) $target['public_url'] : '', '/');
         if ($pub !== '') return $pub . '/' . $p;
-        if ($type === 's3') {
-            $c = $this->s3_creds($target);
-            if ($c['endpoint'] !== '' && $c['bucket'] !== '') return $c['endpoint'] . '/' . $c['bucket'] . '/' . $p;
-            return '';
-        }
-        if ($type === 'local') return 'file://' . $this->target_dir($target) . '/' . $p;
         return '';
     }
 
@@ -319,42 +99,6 @@ class CFSE_Sync_Transports {
                 return false;
             }
             return true;
-        }
-        if ($this->target_type($target) === 'local') {
-            $ok = true;
-            $prefix = isset($target['path_prefix']) ? trim((string) $target['path_prefix'], '/') : '';
-            foreach ((array) $paths as $p) {
-                $rel = $prefix !== '' ? ($prefix . '/' . ltrim($p, '/')) : ltrim($p, '/');
-                $rel = rawurldecode($rel); // 与写入一致：文件名是解码后的原文
-                $file = $this->target_dir($target) . '/' . $rel;
-                if (file_exists($file) && !@unlink($file)) {
-                    $this->log('local 目标删除失败：' . $file, 'WARNING');
-                    $ok = false;
-                }
-                // 顺带清掉产生的空目录（最多 4 层）
-                $dir = dirname($file);
-                for ($i = 0; $i < 4; $i++) {
-                    $base = $this->target_dir($target);
-                    if (rtrim($dir, '/\\') === $base || !is_dir($dir)) break;
-                    $items = @scandir($dir);
-                    if (is_array($items) ? count(array_diff($items, array('.', '..'))) > 0 : true) break;
-                    if (!@rmdir($dir)) break;
-                    $dir = dirname($dir);
-                }
-            }
-            return $ok;
-        }
-        if ($this->target_type($target) === 's3') {
-            // S3 没有简单批量删除（多对象删除要 POST ?delete + XML），逐个删更直观
-            $ok = true;
-            foreach ((array) $paths as $p) {
-                $r = $this->s3_request($target, 'DELETE', $p);
-                if (!$r['ok'] && $r['code'] !== 'not_found') {
-                    $this->log('s3 目标 ' . $target['id'] . ' 删除失败（' . $p . '）：' . $r['hint'], 'WARNING');
-                    $ok = false;
-                }
-            }
-            return $ok;
         }
         $this->log('托管目标 ' . (isset($target['id']) ? $target['id'] : '?') . ' 的类型 ' . $this->target_type($target) . ' 尚未实现删除', 'WARNING');
         return false;
@@ -373,38 +117,6 @@ class CFSE_Sync_Transports {
                 $this->log('托管目标 ' . $target['id'] . ' 上传失败，HTTP ' . $code . '：' . wp_remote_retrieve_body($resp), 'ERROR');
                 return false;
             }
-            return true;
-        }
-        if ($this->target_type($target) === 'local') {
-            // 纯静态档：只写本地目录，不联网（path_prefix 与 s3 一致地生效）
-            $prefix = isset($target['path_prefix']) ? trim((string) $target['path_prefix'], '/') : '';
-            $rel = $prefix !== '' ? ($prefix . '/' . ltrim($path, '/')) : ltrim($path, '/');
-            // 文件名 = 解码后的原文（与 s3/ftp/webdav 一致）：本地产物路径是 URL 形态（中文 slug 为小写 %xx），
-            // 文件系统里存的却是解码后的字符串 ⇒ 否则该目录被 web server 直接服务时中文路径会 404。
-            $rel = rawurldecode($rel);
-            $file = $this->target_dir($target) . '/' . $rel;
-            $dir = dirname($file);
-            if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
-                $this->log('local 目标创建目录失败：' . $dir, 'ERROR');
-                return false;
-            }
-            if (@file_put_contents($file, $content) === false) {
-                $this->log('local 目标写入失败：' . $file, 'ERROR');
-                return false;
-            }
-            $pub = $this->target_public_url($target, $path);
-            $this->log('local 目标已写入：' . $file . ' (' . strlen($content) . ' 字节)' . ($pub !== '' ? (' → ' . $pub) : ''), 'DEBUG');
-            return true;
-        }
-        if ($this->target_type($target) === 's3') {
-            $ct = $content_type !== '' ? $content_type : 'application/octet-stream';
-            $r = $this->s3_request($target, 'PUT', $path, array(), $content, $ct);
-            if (!$r['ok']) {
-                $this->log('s3 目标 ' . $target['id'] . ' 上传失败：' . $r['hint'] . ($r['detail'] !== '' ? (' — ' . $r['detail']) : ''), 'ERROR');
-                return false;
-            }
-            $pub = $this->target_public_url($target, $path);
-            $this->log('s3 目标 ' . $target['id'] . ' 上传成功' . ($pub !== '' ? ('：' . $pub) : ''), 'DEBUG');
             return true;
         }
         $this->log('托管目标 ' . (isset($target['id']) ? $target['id'] : '?') . ' 的类型 ' . $this->target_type($target) . ' 尚未实现上传', 'WARNING');
@@ -772,7 +484,7 @@ class CFSE_Sync_Transports {
     /**
      * 托管目标列表（多托管配置）。
      *   type：'cfse-worker'（当前唯一实现，走 Worker 的 X-Auth-Key 接口）
-     *         —— 规划中：'local'（只写本地目录，纯静态档）、's3'（S3 兼容对象存储直传）
+     *         —— 本插件只支持 CMS（Cloudflare Worker）一种 provider
      *   capabilities：{ r2: 能存静态文件, d1: 能存文章数据, cache: 支持清缓存 }
      *   enabled=false 忽略。
      * 未配置时用旧设置（cf_site_url + cf_auth_key）自动迁移成一条默认 target ⇒ 行为不变。
@@ -790,25 +502,12 @@ class CFSE_Sync_Transports {
                 'transport' => 'worker-api',
                 'legacy_type' => 'cfse-worker',
                 'capabilities' => array('r2' => true, 'd1' => true, 'render' => true, 'cache' => true),
-                'intents' => array('md', 'static-list', 'static-only', 'backup'),
+                'intents' => array('md', 'static-list'),
                 'defaults' => array(
                     'capabilities' => array('r2' => true, 'd1' => true, 'render' => true, 'cache' => true),
                     'intent' => array('md', 'static-list'),
                 ),
                 'fields' => array('endpoint', 'auth_key', 'path_prefix', 'public_url'),
-            ),
-            's3' => array(
-                'id' => 's3',
-                'name' => 'S3 兼容对象存储',
-                'transport' => 's3',
-                'legacy_type' => 's3',
-                'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
-                'intents' => array('static-only', 'backup'),
-                'defaults' => array(
-                    'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
-                    'intent' => array('static-only'),
-                ),
-                'fields' => array('endpoint', 'bucket', 'region', 'access_key', 'secret_key', 'path_style', 'path_prefix', 'public_url'),
             ),
         );
     }
@@ -919,15 +618,6 @@ class CFSE_Sync_Transports {
             if ($tplId === 'cloudflare') {
                 $entry['endpoint'] = isset($t['endpoint']) ? esc_url_raw(trim($t['endpoint'])) : '';
                 $entry['auth_key'] = isset($t['auth_key']) ? sanitize_text_field($t['auth_key']) : '';
-                $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
-            } elseif ($tplId === 's3') {
-                $entry['endpoint'] = isset($t['endpoint']) ? esc_url_raw(trim($t['endpoint'])) : '';
-                $entry['bucket'] = isset($t['bucket']) ? sanitize_text_field(trim($t['bucket'])) : '';
-                $entry['region'] = isset($t['region']) && trim($t['region']) !== '' ? sanitize_text_field(trim($t['region'])) : 'auto';
-                $entry['access_key'] = isset($t['access_key']) ? sanitize_text_field(trim($t['access_key'])) : '';
-                $entry['secret_key'] = isset($t['secret_key']) ? sanitize_text_field(trim($t['secret_key'])) : '';
-                $mode = isset($t['path_style']) ? (string) $t['path_style'] : 'auto';
-                $entry['path_style'] = in_array($mode, array('auto', 'path', 'virtual'), true) ? $mode : 'auto';
                 $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
             } elseif ($tplId === 'github') {
                 $entry['repo'] = isset($t['repo']) ? sanitize_text_field(trim($t['repo'])) : '';

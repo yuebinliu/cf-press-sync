@@ -687,9 +687,10 @@ public function get_config() {
         return CFSE_Sync_Transports::get_instance()->target_public_url($target, $key);
     }
 
-    /** 按类型分派「清缓存」；local/s3 等无缓存层 ⇒ 视为无需清理（返回 true） */
+    /** 清缓存：只有 CMS（Cloudflare Worker）有缓存层；其它类型视为无需清理（返回 true） */
     private function target_purge($target, $keys) {
-        if ($this->target_type($target) === 'cfse-worker') {
+        $type = isset($target['type']) ? (string) $target['type'] : 'cfse-worker';
+        if ($type === 'cfse-worker') {
             $resp = $this->worker_request($target, '/purge-cache', 'POST', array('keys' => array_values($keys)), 5);
             if ($resp === null) return false;
             return wp_remote_retrieve_response_code($resp) < 400;
@@ -718,48 +719,18 @@ public function get_config() {
         return CFSE_Sync_Worker_CMS::get_instance()->d1_query($sql, $params);
     }
 
-    // ===== 以下 10 个方法已拆分到 includes/class-transports.php（同名转发，调用点无需改动）=====
+    // ===== 以下方法已拆分到 includes/class-transports.php（同名转发，调用点无需改动）=====
 
-    private function sigv4_uri_encode($s, $encode_slash = true) {
-        return CFSE_Sync_Transports::get_instance()->sigv4_uri_encode($s, $encode_slash);
-    }
-
-    private function sigv4_canonical_query($query) {
-        return CFSE_Sync_Transports::get_instance()->sigv4_canonical_query($query);
-    }
-
-    private function s3_creds($target) {
-        return CFSE_Sync_Transports::get_instance()->s3_creds($target);
-    }
-
-    private function s3_path_style($target, $host) {
-        return CFSE_Sync_Transports::get_instance()->s3_path_style($target, $host);
-    }
-
-    private function s3_classify($code, $text) {
-        return CFSE_Sync_Transports::get_instance()->s3_classify($code, $text);
-    }
-
-    private function s3_request($target, $method, $key = '', $query = array(), $body = '', $content_type = '') {
-        return CFSE_Sync_Transports::get_instance()->s3_request($target, $method, $key, $query, $body, $content_type);
-    }
-
-    private function s3_test_connection($target) {
-        return CFSE_Sync_Transports::get_instance()->s3_test_connection($target);
-    }
-
-    private function sigv4_sign($creds, $method, $path, $query = array(), $payload = '', $date = null, $sign_content_sha = true) {
-        return CFSE_Sync_Transports::get_instance()->sigv4_sign($creds, $method, $path, $query, $payload, $date, $sign_content_sha);
-    }
-
-    private function target_dir($target) {
-        return CFSE_Sync_Transports::get_instance()->target_dir($target);
-    }
-
-    private function target_type($target) {
-        return CFSE_Sync_Transports::get_instance()->target_type($target);
-    }
-    private function d1_batch($statements, $only_ids = null) {
+    
+    
+    
+    
+    
+    
+    
+    
+    
+        private function d1_batch($statements, $only_ids = null) {
         return CFSE_Sync_Worker_CMS::get_instance()->d1_batch($statements, $only_ids);
     }
     private function worker_d1_batch($target, $statements) {
@@ -1411,57 +1382,6 @@ public function handle_deploy_worker() {
                 } else {
                     $out[] = array('name' => $name, 'ok' => false, 'code' => 'http_' . $code, 'detail' => 'HTTP ' . $code, 'http' => $code);
                 }
-            } elseif ($type === 'local') {
-                $dir = $this->target_dir($t);
-                if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
-                    $out[] = array('name' => $name, 'ok' => false, 'code' => 'fs', 'detail' => '目录不存在且无法创建：' . $dir, 'http' => 0);
-                    continue;
-                }
-                $w = is_writable($dir);
-                $out[] = array('name' => $name, 'ok' => $w, 'code' => $w ? 'ok' : 'fs', 'detail' => $dir . ($w ? '（可写）' : '（不可写）'), 'http' => 0);
-            } elseif ($type === 'github') {
-                $repo = isset($t['repo']) ? trim($t['repo']) : '';
-                $tok  = isset($t['token']) ? trim($t['token']) : '';
-                if ($repo === '' || $tok === '') {
-                    $out[] = array('name' => $name, 'ok' => false, 'code' => 'config', 'detail' => '仓库 owner/name 与 Token 都要填', 'http' => 0);
-                } else {
-                    $resp = wp_remote_get('https://api.github.com/repos/' . $repo, array(
-                        'timeout' => 15,
-                        'headers' => array(
-                            'Authorization' => 'Bearer ' . $tok,
-                            'Accept'        => 'application/vnd.github+json',
-                            'User-Agent'    => 'CFSE-Sync/1.0',
-                        ),
-                    ));
-                    if (is_wp_error($resp)) {
-                        $out[] = array('name' => $name, 'ok' => false, 'code' => 'network', 'detail' => $resp->get_error_message(), 'http' => 0);
-                    } else {
-                        $code = (int) wp_remote_retrieve_response_code($resp);
-                        $body = (string) wp_remote_retrieve_body($resp);
-                        if ($code === 200) {
-                            $j = json_decode($body, true);
-                            $perm = (is_array($j) && isset($j['permissions']['push']) && $j['permissions']['push']) ? '有写权限' : '只读权限（部署需要写权限）';
-                            $out[] = array('name' => $name, 'ok' => true, 'code' => 'ok',
-                                'detail' => 'HTTP 200，仓库可访问（' . $perm . '）' . (isset($j['full_name']) ? '：' . $j['full_name'] : ''), 'http' => $code);
-                        } elseif ($code === 401) {
-                            $out[] = array('name' => $name, 'ok' => false, 'code' => 'unauthorized', 'detail' => 'HTTP 401：Token 不对或已过期', 'http' => $code);
-                        } elseif ($code === 404) {
-                            $out[] = array('name' => $name, 'ok' => false, 'code' => 'not_found',
-                                'detail' => 'HTTP 404：仓库不存在，或 Token 无权访问私有仓库（需 repo 权限）', 'http' => $code);
-                        } elseif ($code === 403) {
-                            $out[] = array('name' => $name, 'ok' => false, 'code' => 'forbidden', 'detail' => 'HTTP 403：权限不足或被限流', 'http' => $code);
-                        } else {
-                            $out[] = array('name' => $name, 'ok' => false, 'code' => 'http_' . $code, 'detail' => "HTTP {$code} " . substr($body, 0, 160), 'http' => $code);
-                        }
-                    }
-                }
-            } elseif ($type === 's3') {
-                $r = $this->s3_test_connection($t);
-                $out[] = array(
-                    'name' => $name, 'ok' => $r['ok'], 'code' => $r['code'],
-                    'detail' => $r['hint'] . ($r['http'] ? ('（HTTP ' . $r['http'] . '）') : '') . ($r['detail'] !== '' ? (' — ' . $r['detail']) : ''),
-                    'http' => $r['http'],
-                );
             } else {
                 $out[] = array('name' => $name, 'ok' => false, 'code' => 'unimplemented', 'detail' => '类型 ' . $type . ' 尚未实现', 'http' => 0);
             }
