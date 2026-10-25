@@ -274,11 +274,9 @@ class CFSE_Sync_Worker_CMS {
         $desc = function_exists('wp_specialchars_decode')
             ? wp_specialchars_decode((string) get_option('blogdescription', ''), ENT_QUOTES)
             : (string) get_option('blogdescription', '');
-        $url = rtrim((string) get_option('cf_site_url', get_option('home', '')), '/');
-        $storage = function_exists('cfse_storage_pattern') ? cfse_storage_pattern() : '{slug}/index.html';
         $gmt_offset = (float) get_option('gmt_offset', 0);
-        if ($name === '' && $url === '') {
-            $this->log('站点名与站点 URL 均为空，跳过站点信息同步', 'WARNING');
+        if ($name === '' && $desc === '') {
+            $this->log('站点名与描述均为空，跳过站点信息同步', 'WARNING');
             return false;
         }
         $defAuthor = array('name' => '', 'slug' => '');
@@ -287,11 +285,16 @@ class CFSE_Sync_Worker_CMS {
             $defAuthor['name'] = (string) $admins[0]->display_name;
             $defAuthor['slug'] = (string) $admins[0]->user_nicename;
         }
+        // 2026-10-25 收窄：只推「站点基础信息」。
+        //   · 不推 storagePattern —— URL 结构归 CMS 后台管（CMS 侧已拒收该字段）。
+        //     以前 WP 每次同步站点信息都把 WP 的 permalink 推上去，
+        //     把用户在 CMS 后台改好的 URL 结构覆盖回去。
+        //   · 不推 url —— 那是「站点对外地址」（模板里 {{SITE_URL}} 的值），
+        //     而 WP 侧的 cf_site_url 其实是「Worker endpoint」（连接地址），语义不同。
+        //     连接地址由插件自己存，不走这里。
         $fields = array(
             'name'           => $name,
             'description'    => $desc,
-            'url'            => $url,
-            'storagePattern' => $storage,
             'timezoneOffset' => (int) round($gmt_offset * 3600),
             'defaultAuthor'  => $defAuthor,
         );
@@ -942,9 +945,20 @@ public function get_post_storage_path($post) {
     $parts = explode('/', $relative);
     $slug = end($parts);
     
-    // 根据Permalink结构生成路径
-    $structure = get_option('permalink_structure');
-    $pattern = $this->permalink_to_storage_pattern($structure);
+    // 2026-10-25：**优先用 CMS 侧的 storagePattern**
+    //
+    // URL 结构归 CMS 后台管（D1 settings k='site'）。如果这里还用 WP 自己的
+    // permalink 推导，用户在 CMS 后台改了结构后，两边算出的 R2 路径就不同：
+    //   · WP 去删「WP 算的路径」→ 真实单页（在 CMS 算的路径上）删不掉
+    //   · Worker 命中 R2 直接返回、不回查 D1 ⇒ **文章更新不生效**
+    //
+    // 所以这里从 CMS 拉一次 storagePattern（本地缓存 5 分钟），
+    // 拉不到（未连接 / 网络失败）才退回本地 permalink 推导（老行为）。
+    $pattern = $this->get_remote_storage_pattern();
+    if ($pattern === '') {
+        $structure = get_option('permalink_structure');
+        $pattern = $this->permalink_to_storage_pattern($structure);
+    }
     
     // 提取日期信息
     $year = get_the_date('Y', $post);
@@ -962,9 +976,55 @@ public function get_post_storage_path($post) {
 }
 
 
+/**
+ * 从 CMS 拉当前的 storagePattern（URL 结构）。
+ *
+ * 走 GET /sync/site-info（X-Auth-Key 鉴权，只读）。本地缓存 5 分钟 ——
+ * storagePattern 改动极少，但每次同步都拉一次会给 Worker 增加无谓请求。
+ *
+ * @return string 形如 '{year}/{slug}/index.html'；拉不到返回空串（调用方退回本地推导）
+ */
+public function get_remote_storage_pattern() {
+    $cached = get_transient('cfse_remote_storage_pattern');
+    if (is_string($cached) && $cached !== '') return $cached;
+
+    $pattern = '';
+    try {
+        $res = $this->for_each_target('d1', function ($t) {
+            $resp = $this->worker_request($t, '/sync/site-info', 'GET', null, 10);
+            if ($resp === null) return '';
+            if (wp_remote_retrieve_response_code($resp) !== 200) return '';
+            $json = json_decode((string) wp_remote_retrieve_body($resp), true);
+            return (is_array($json) && !empty($json['storagePattern'])) ? (string) $json['storagePattern'] : '';
+        });
+        if (!empty($res['results'])) {
+            foreach ($res['results'] as $v) {
+                if (is_string($v) && $v !== '') { $pattern = $v; break; }
+            }
+        }
+    } catch (Throwable $e) {
+        $this->log('拉取 CMS 的 storagePattern 失败（退回本地推导）：' . $e->getMessage(), 'DEBUG');
+    }
+
+    if ($pattern !== '') {
+        set_transient('cfse_remote_storage_pattern', $pattern, 300);
+    }
+    return $pattern;
+}
+
+
+    /**
+     * 生成占位文件（Worker 目录为空时的兜底）。
+     *
+     * 2026-10-25：routes.js 不再由插件生成 —— CMS 侧已运行时化，
+     *   URL 结构从 D1 settings k='site' 的 storagePattern 读。
+     *   这里的占位内容也相应改成提示「请下载 CMS 发行包」。
+     */
     public function generate_initial_file($name) {
-        $content = $name === 'routes.js' 
-            ? '// 路由规则 - 将由插件自动生成' . "\n" . '// 请点击"同步路由规则"生成完整内容' . "\n" . 'export async function handleRequest(request, env) {' . "\n" . '    return new Response(\'请先点击"同步路由规则"生成路由配置\', { status: 500 });' . "\n" . '}'
+        $content = $name === 'routes.js'
+            ? '// routes.js —— CMS 发行包的一部分' . "\n"
+              . '// 本插件不再生成路由规则：URL 结构由 CMS 后台管理（存 D1 settings k=\'site\' 的 storagePattern）。' . "\n"
+              . '// 请在设置页「部署 CMS」里下载发行包，把完整 src/ 覆盖到本目录。' . "\n"
             : '// 模板文件 - 将由插件自动生成' . "\n" . '// 请点击"同步模板"生成完整内容' . "\n" . 'export function renderHomepage() {' . "\n" . '    return \'<h1>请先点击"同步模板"生成模板配置</h1>\';' . "\n" . '}';
         @file_put_contents(CFSE_WORKER_DIR . $name, $content);
     }

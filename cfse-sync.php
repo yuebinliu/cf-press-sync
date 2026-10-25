@@ -205,7 +205,6 @@ class CFSE_Sync_Plugin {
 		add_action('admin_post_cf_bulk_export', array($this, 'handle_bulk_export'));
 		add_action('admin_post_cf_pull_worker', array($this, 'handle_pull_worker'));
 		add_action('admin_post_cf_clear_cache', array($this, 'handle_clear_cache'));
-		add_action('admin_post_cf_sync_routes', array($this, 'handle_sync_routes'));
 		add_action('admin_post_cf_seed_admin', array($this, 'handle_seed_admin'));
 		add_action('admin_post_cf_deploy_worker', array($this, 'handle_deploy_worker'));
 		add_filter('manage_posts_columns', array($this, 'add_export_column'));
@@ -1075,84 +1074,19 @@ public function get_config() {
     // Worker 代码管理
     // ============================================
 
-    public function handle_sync_routes() {
-        if (!current_user_can('manage_options')) wp_die('权限不足');
-        check_admin_referer('cf_sync_routes');
-        @set_time_limit(0);
-        $result = $this->sync_routes();
-        wp_redirect(add_query_arg('routes_synced', $result ? '1' : '0', admin_url('options-general.php?page=cfse-sync')));
-        exit;
-    }
-
-    private function sync_routes() {
-        $this->log('开始同步路由规则...', 'INFO');
-        $template_path = CFSE_WORKER_DIR . 'routes.template.js';
-        $target_path = CFSE_WORKER_DIR . 'routes.js';
-
-        if (!file_exists($template_path)) {
-            $this->log('路由模板文件不存在: routes.template.js', 'ERROR');
-            return false;
-        }
-
-        $template = file_get_contents($template_path);
-        $permalink = get_option('permalink_structure');
-        $route_pattern = $this->permalink_to_route_pattern($permalink);
-        $storage_pattern = $this->permalink_to_storage_pattern($permalink);
-
-        $content = str_replace('{{ROUTE_PATTERN}}', $route_pattern, $template);
-        $content = str_replace('{{STORAGE_PATTERN}}', $storage_pattern, $content);
-        $content = str_replace('{{SITE_URL}}', $this->config['site_url'], $content);
-        $content = str_replace('{{CFSE_PER_PAGE}}', $this->config['posts_per_page'], $content);
-
-        if (file_put_contents($target_path, $content) === false) {
-            $this->log('写入 routes.js 失败', 'ERROR');
-            return false;
-        }
-
-        $this->log('路由规则同步完成', 'INFO');
-        return true;
-    }
 
 /**
  * 修复 Permalink 转路由模式 - 支持更多标签
  */
-private function permalink_to_route_pattern($permalink) {
-    if (empty($permalink)) {
-        return '/^\\/([^/]+)\\/$/';
-    }
-    
-    $pattern = preg_quote($permalink, '/');
-    
-    // 支持的标签
-    $tags = array(
-        '%year%' => '(\\d{4})',
-        '%monthnum%' => '(\\d{2})',
-        '%day%' => '(\\d{2})',
-        '%hour%' => '(\\d{2})',
-        '%minute%' => '(\\d{2})',
-        '%second%' => '(\\d{2})',
-        '%postname%' => '([^/]+)',
-        '%post_id%' => '(\\d+)',
-        '%category%' => '([^/]+)',
-        '%author%' => '([^/]+)',
-    );
-    
-    foreach ($tags as $tag => $regex) {
-        $pattern = str_replace($tag, $regex, $pattern);
-    }
-    
-    // 处理可选部分（括号中的内容）
-    $pattern = preg_replace('/\(\?:(.*?)\)/', '(?:$1)?', $pattern);
-    
-    // 生成 JS 正则字面量，必须 ^...$ 全锚定：
-    // 例 /%postname%/ → /^\/([^/]+)\/$/（只匹配单段 slug 路径，不会误吞 /category/x/、/tag/x/、/2024/）
-    return '/^' . $pattern . '$/';
-}
     private function permalink_to_storage_pattern($permalink) {
         return CFSE_Sync_Worker_CMS::get_instance()->permalink_to_storage_pattern($permalink);
     }
 	/**
-	 * 部署 Worker：先按当前 permalink 设置重新生成 routes.js，再调用 wrangler 推上去。
+	 * 部署 Worker：把 CMS 发行包推上去（调用 wrangler）。
+	 *
+	 * 2026-10-25：不再重新生成 routes.js —— CMS 侧已运行时化
+	 * （URL 结构从 D1 settings k='site' 的 storagePattern 读，改完即生效），
+	 * 路由规则不再是编译期常量，插件侧没有生成它的必要。
 	 */
 public function handle_deploy_worker() {
     if (!current_user_can('manage_options')) wp_die('权限不足');
@@ -1161,9 +1095,6 @@ public function handle_deploy_worker() {
 
     // 模板由 Worker 后台的模板编辑器管理（存 R2 wp-content/themes/<id>/tpl.json），
     // 插件侧不再生成 tpl.json，也不再搬主题静态资源。
-
-    // 重新生成 routes.js（源为 routes.template.js；每次部署同步，确保 permalink/每页数等最新）
-    $this->sync_routes();
 
     $deployed = $this->deploy_worker();
     wp_redirect(add_query_arg('deployed', $deployed ? '1' : '0', admin_url('options-general.php?page=cfse-sync')));

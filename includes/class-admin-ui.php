@@ -92,9 +92,6 @@ class CFSE_Sync_Admin_UI {
                     <p>✅ 全量同步完成！成功 <strong><?php echo intval($_GET['exported']); ?></strong> / <?php echo intval($_GET['total']); ?> 篇文章</p>
                 </div>
             <?php endif; ?>
-            <?php if (isset($_GET['routes_synced']) && $_GET['routes_synced']): ?>
-                <div class="notice notice-success is-dismissible"><p>✅ 路由规则已同步到本地 <code>worker/src/routes.js</code></p></div>
-            <?php endif; ?>
             <?php if (isset($_GET['deployed']) && $_GET['deployed']): ?>
                 <div class="notice notice-success is-dismissible"><p>✅ Worker 部署成功！</p></div>
             <?php endif; ?>
@@ -416,10 +413,6 @@ class CFSE_Sync_Admin_UI {
                             <?php if ($templates_exists): ?>✅ template-engine.js<?php else: ?>❌ template-engine.js<?php endif; ?>
                         </p>
                         <div style="margin: 10px 0; display: flex; gap: 10px; flex-wrap: wrap;">
-                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_sync_routes')); ?>" style="display:inline;">
-                                <?php wp_nonce_field('cf_sync_routes'); ?>
-                                <button type="submit" class="button">🔄 同步路由规则</button>
-                            </form>
                             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_deploy_worker')); ?>" style="display:inline;">
                                 <?php wp_nonce_field('cf_deploy_worker'); ?>
                                 <button type="submit" class="button button-primary" onclick="return confirm('用本机 wrangler 把 worker/ 目录部署到 Cloudflare？需本机已登录 wrangler。')">🚀 部署 Worker</button>
@@ -464,7 +457,7 @@ class CFSE_Sync_Admin_UI {
                                     <p class="description">自动同步（定时任务）每批处理多少篇</p></td></tr>
                             <tr><th><label for="cf_posts_per_page">列表每页文章数</label></th>
                                 <td><input type="number" id="cf_posts_per_page" name="cf_posts_per_page" value="<?php echo esc_attr($this->config['posts_per_page']); ?>" style="width:100px" min="1" />
-                                    <p class="description">首页/分类/标签/归档每页显示多少篇，用于计算总页数与分页导航（默认与 WP「设置→阅读」一致 = 10）。保存后需点一次「🔄 同步路由规则」生效。</p></td></tr>
+                                    <p class="description">首页/分类/标签/归档每页显示多少篇（默认与 WP「设置→阅读」一致 = 10）。<b>此项已由 CMS 后台接管</b>（D1 settings k='cache'），此处仅为 WP 侧参考值。</p></td></tr>
                             <tr><th><label for="cf_max_retries">写入重试次数</label></th>
                                 <td><input type="number" id="cf_max_retries" name="cf_max_retries" value="<?php echo esc_attr($this->config['max_retries']); ?>" style="width:100px" min="1" /></td></tr>
                             <tr><th>日志与调试</th>
