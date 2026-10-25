@@ -1,0 +1,42 @@
+test: 部署脚本 + 真实环境验证脚本
+
+## tools/deploy-test-server.sh
+
+一键部署到 192.168.2.2 并自检：
+
+    ① 打包（排除 .git / cms-package / node_modules）
+    ② 上传解压（先备份旧版本到 cfse-sync.bak-prev）
+    ③ 服务器 php -l 逐文件语法检查
+    ④ PHP 模式断点检查（tools/check-php-modes.mjs）
+    ⑤ 离线测试（test/verify-onboarding.php，14 项断言）
+    ⑥ 真实登录态渲染验证（test/render-settings.php）
+
+用法：bash tools/deploy-test-server.sh
+
+## test/ 下新增的脚本
+
+| 文件 | 用途 |
+|---|---|
+| `render-settings.php` | 真实 WP 环境渲染设置页 + 17 项结构断言 + PHP 错误扫描 |
+| `make-cookie.php` | 生成管理员登录 cookie（不改密码），供 HTTP 层验证 |
+| `switch-plugin.php` | 切换激活的插件（走 WP API，会清 alloptions 缓存） |
+
+## 顺带修一个坑
+
+`switch-plugin.php` 里读「其他插件列表」不能靠 get_option('active_plugins') ——
+直接 UPDATE 数据库后，WP 的 alloptions 缓存里还是旧值，get_option 返回 false。
+必须从数据库原始值里捞（maybe_unserialize）。
+
+## 服务器当前状态（2026-10-25）
+
+- 插件目录：/mnt/optane/webstack/www/wp-content/plugins/cfse-sync/
+- 激活状态：**cfse-sync 已激活**（cf 全功能版已停用）
+- 旧目录备份：cfse-sync.bak-before-v2/（改造前）、cfse-sync.bak-prev/（每次部署前）
+- 配置继承自原 cf：cf_site_url=https://yuebin.uk、cf_auth_key 已填
+- 旧 s3 / github 目标被正确跳过（本插件不支持这些 provider）
+
+实测：
+- 连接 CMS → HTTP 200，读到站点名「CF Static Export Pro」与 storagePattern
+- 状态机 configured → connected 切换正常
+- 三屏互斥：connected 状态下只有第三屏出现
+- 设置页渲染 21845 字节，零 PHP 错误
