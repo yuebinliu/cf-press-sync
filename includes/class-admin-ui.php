@@ -106,218 +106,6 @@ class CFSE_Sync_Admin_UI {
                             <p class="description">填你的 CMS 地址和同步密钥。密钥在 <b>CMS 后台 → ⚙️ 设置</b> 里看。
                                 多个 CMS 实例时，下面的「站点列表」可以再加。</p>
                             <?php $this->render_connection_form(); ?>
-                            <p style="margin-top:8px;">
-                                <button type="button" class="button" id="cfse-add-target">＋ 添加目标</button>
-                                <button type="button" class="button" id="cfse-test-targets">🔌 测试连通性</button>
-                                <span id="cfse-test-result" class="description" style="margin-left:8px;"></span>
-                                <span class="description" style="margin-left:8px;">（测试用的是<b>已保存</b>的配置，改动后请先保存）</span>
-                            </p>
-                            <script>
-                            (function(){
-                              var body = document.getElementById('cfse-targets-body');
-                              if (!body) return;
-                              var idx = body.querySelectorAll('tr.cfse-target-row').length;
-                              // 字段联动：按「模板」显隐字段组（B7②）
-                              //   cloudflare ⇒ endpoint + auth_key
-                              //   s3         ⇒ endpoint + s3 组（隐藏 auth_key）
-                              //   local      ⇒ dir（隐藏 endpoint / auth_key / s3）
-                              // 「⚙️ 配置」打开对应弹窗（弹窗互斥天然成立）
-                              function bindDetail(tr){
-                                var btn = tr.querySelector('.cfse-toggle-detail');
-                                if (!btn) return;
-                                btn.addEventListener('click', function(){
-                                  var m = document.getElementById(btn.getAttribute('data-modal'));
-                                  if (m) m.style.display = 'block';
-                                });
-                              }
-                              // 关闭弹窗（按钮或点遮罩）
-                              document.addEventListener('click', function(e){
-                                var t = e.target;
-                                if (t && t.classList && t.classList.contains('cfse-modal-close')) {
-                                  var box = t.closest ? t.closest('.cfse-target-modal') : null;
-                                  if (box) box.style.display = 'none';
-                                  return;
-                                }
-                                if (t && t.classList && t.classList.contains('cfse-target-modal')) {
-                                  t.style.display = 'none';
-                                }
-                              });
-                              // 模板 → 支持的能力（与 PHP get_hosting_templates() 一致；只有 cloudflare 支持 d1/render/cache）
-                              var TPL_CAPS = {
-                                'cloudflare': ['r2', 'd1', 'render', 'cache'],
-                                's3': ['r2']
-                              };
-                              var TPL_BLOCKS = {
-                                'cloudflare': '.cfse-f-cloudflare', 's3': '.cfse-f-s3'
-                              };
-                              function rowIdx(tr){
-                                var el = tr.querySelector('input[name^="cf_hosting_targets["]');
-                                var m = el ? String(el.name).match(/^cf_hosting_targets\[(\d+)\]/) : null;
-                                return m ? m[1] : null;
-                              }
-                              // 模板块内字段启停：隐藏块若仍可提交，其旧值会以同名键后写覆盖
-                              // 用户在可见块里的输入（PHP $_POST 同名键后写胜）⇒ 「保存不上」。
-                              // disabled 字段不随表单提交 ⇒ 每个目标只有当前模板块的字段会提交。
-                              function setBlockEnabled(block, on){
-                                if (!block) return;
-                                var fs = block.querySelectorAll('input,select,textarea');
-                                for (var i = 0; i < fs.length; i++) fs[i].disabled = !on;
-                              }
-                              function applyTemplate(tr, v, modal){
-                                // ① 弹窗里的「模板相关块」显隐 + 启停（弹窗在 #cfse-modals，不在 tr 内）
-                                Object.keys(TPL_BLOCKS).forEach(function(k){
-                                  var el = modal ? modal.querySelector(TPL_BLOCKS[k]) : null;
-                                  if (el) { el.style.display = (v === k) ? '' : 'none'; setBlockEnabled(el, v === k); }
-                                });
-                                // ② endpoint / Auth Key 的显示规则（这些字段都在弹窗里，必须从 modal 找）
-                                var ep = modal ? modal.querySelector('.cfse-f-endpoint') : null;
-                                var isCf = (v === 'cloudflare');
-                                if (ep) { ep.style.display = isCf ? '' : 'none'; ep.disabled = !isCf; }
-                                var wk = modal ? modal.querySelector('.cfse-f-workerkey') : null;
-                                if (wk) { wk.style.display = (v === 'cloudflare') ? '' : 'none'; setBlockEnabled(wk, v === 'cloudflare'); }
-                                // ③ 能力按模板可选范围置灰 / 启用（这一步就是「选模型 ⇒ 能力跟着变」）
-                                var idx = rowIdx(tr);
-                                if (idx !== null) {
-                                  var allow = TPL_CAPS[v] || ['r2'];
-                                  ['r2', 'd1', 'render', 'cache'].forEach(function(ck){
-                                    var box = tr.querySelector('input[name="cf_hosting_targets[' + idx + '][capabilities][' + ck + ']"]');
-                                    if (!box) return;
-                                    var ok = allow.indexOf(ck) !== -1;
-                                    box.disabled = !ok;
-                                    var lab = box.parentNode;
-                                    if (lab) {
-                                      lab.style.opacity = ok ? '' : '.45';
-                                      if (ok) lab.removeAttribute('title'); else lab.setAttribute('title', '该模板不支持此能力');
-                                    }
-                                    if (!ok) box.checked = false;
-                                  });
-                                }
-                              }
-                              // 表格行与弹窗里的 名称/模板 双向同步（改一处另一处跟着变 ⇒ 提交值一致）
-                              function bindSync(tr, modal){
-                                var idx = rowIdx(tr);
-                                if (idx === null) return;
-                                var q = 'cf_hosting_targets[' + idx + ']';
-                                var pairs = [
-                                  [tr.querySelector('input[name="' + q + '[name]"]'), modal ? modal.querySelector('input[name="' + q + '[name]"]') : null],
-                                  [tr.querySelector('select[name="' + q + '[template]"]'), modal ? modal.querySelector('select[name="' + q + '[template]"]') : null]
-                                ];
-                                pairs.forEach(function (p) {
-                                  var a = p[0], b = p[1];
-                                  if (!a || !b) return;
-                                  function mirror(src, dst) {
-                                    ['input', 'change'].forEach(function (ev) {
-                                      src.addEventListener(ev, function () {
-                                        if (dst.value !== src.value) dst.value = src.value;
-                                        if (src.tagName === 'SELECT') syncRow(tr);
-                                      });
-                                    });
-                                  }
-                                  mirror(a, b); mirror(b, a);
-                                });
-                              }
-                              function syncRow(tr){
-                                var tpl = tr.querySelector('.cfse-target-template');
-                                var v = tpl ? tpl.value : 'cloudflare';
-                                var openBtn = tr.querySelector('.cfse-toggle-detail');
-                                var modal = openBtn ? document.getElementById(openBtn.getAttribute('data-modal')) : null;
-                                applyTemplate(tr, v, modal);
-                              }
-                              function bind(tr){
-                                var tpl = tr.querySelector('.cfse-target-template');
-                                if (tpl) tpl.addEventListener('change', function(){ syncRow(tr); });
-                                var del = tr.querySelector('.cfse-del-target');
-                                if (del) del.addEventListener('click', function(){
-                                  // 关键：弹窗在 #cfse-modals 里、独立于表格行；不一起删掉的话，
-                                  // 弹窗里的 cf_hosting_targets[N][...] 仍会随表单提交 ⇒ 目标「删不掉」。
-                                  var ob = tr.querySelector('.cfse-toggle-detail');
-                                  if (ob) {
-                                    var mdl = document.getElementById(ob.getAttribute('data-modal'));
-                                    if (mdl && mdl.parentNode) mdl.parentNode.removeChild(mdl);
-                                  }
-                                  tr.parentNode.removeChild(tr);
-                                });
-                                bindSync(tr, tr.querySelector('.cfse-toggle-detail') ? document.getElementById(tr.querySelector('.cfse-toggle-detail').getAttribute('data-modal')) : null);
-                                syncRow(tr);
-                              }
-                              Array.prototype.forEach.call(body.querySelectorAll('tr.cfse-target-row'), function(tr){ bind(tr); bindDetail(tr); });
-                              var addBtn = document.getElementById('cfse-add-target');
-                              if (addBtn) addBtn.addEventListener('click', function(){
-                                var tmp = document.createElement('tbody');
-                                tmp.innerHTML = '<tr class="cfse-target-row">' +
-                                  '<td><input type="checkbox" name="cf_hosting_targets[' + idx + '][enabled]" value="1" checked /></td>' +
-                                  '<td><input type="text" name="cf_hosting_targets[' + idx + '][name]" style="width:100%;" placeholder="例如：备份站" /></td>' +
-                                  '<td><select name="cf_hosting_targets[' + idx + '][template]" class="cfse-target-template" style="width:100%;"><option value="cloudflare">Cloudflare（Worker + R2 + D1）</option><option value="s3">S3 兼容对象存储</option></select></td>' +
-                                  '<td class="cfse-sum"><div><b class="cfse-sum-dir">（保存后显示）</b></div><div style="font-size:11px;color:#646970;">目录与站点 id 将在保存后生成</div></td>' +
-                                  '<td style="white-space:nowrap;font-size:11px;">' +
-                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][r2]" value="1" checked /> 静态文件</label><br/>' +
-                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][d1]" value="1" checked /> 文章数据</label><br/>' +
-                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][render]" value="1" checked /> 渲染</label><br/>' +
-                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][cache]" value="1" checked /> 清缓存</label>' +
-                                  '</td>' +
-                                  '<td style="text-align:center;"><input type="checkbox" name="cf_hosting_targets[' + idx + '][is_default]" value="1" /></td>' +
-                                  '<td style="white-space:nowrap;"><button type="button" class="button cfse-toggle-detail" data-modal="cfse-modal-' + idx + '">⚙️ 配置</button> <button type="button" class="button cfse-del-target" title="删除该目标">✕</button></td>' +
-                                '</tr>';
-                                var modalHtml = '<div class="cfse-target-modal" id="cfse-modal-' + idx + '" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100000;font-size:13px;">' +
-                                  '<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:#fff;padding:18px 22px;font-size:13px;line-height:1.6;border-radius:6px;width:min(92vw,780px);max-height:86vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.3);">' +
-                                  '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><b style="font-size:15px;">⚙️ 站点配置</b><button type="button" class="button cfse-modal-close">关闭</button></div>' +
-                                  '<div style="padding-bottom:10px;border-bottom:1px solid #f0f0f1;margin-bottom:10px;">' +
-                                    '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;">' +
-                                      '<span style="color:#646970;"><code>（保存后生成）</code></span>' +
-                                      '<label>名称 <input type="text" name="cf_hosting_targets[' + idx + '][name]" style="width:150px;" placeholder="例如：备份站" /></label>' +
-                                      '<label>模板 <select name="cf_hosting_targets[' + idx + '][template]" class="cfse-target-template" style="width:auto;"><option value="cloudflare">Cloudflare（Worker + R2 + D1）</option><option value="s3">S3 兼容对象存储</option></select></label>' +
-                                      '<input type="hidden" name="cf_hosting_targets[' + idx + '][id]" value="" />' +
-                                    '</div>' +
-                                    '<div style="margin-top:8px;">' +
-                                      '<label>本地保存目录 <code>wp-content/cfse-static/</code><input type="text" name="cf_hosting_targets[' + idx + '][site_dir]" style="width:140px;" placeholder="留空 = 站点 id" /></label>' +
-                                      '<span class="description" style="font-size:12px;">（英文/数字/下划线/连字符；保存时会自动创建目录）</span>' +
-                                    '</div>' +
-                                  '</div>' +
-                                  '<div style="margin-top:8px;">' +
-                                    '<label>站点地址（Worker 域名）<br/><input type="text" class="cfse-f-endpoint" name="cf_hosting_targets[' + idx + '][endpoint]" style="width:100%;" placeholder="https://你的站点" /></label>' +
-                                    '<span class="description" style="font-size:12px;">Cloudflare 目标填 Worker 域名；保存时会同步为本站的「静态站点 URL」</span>' +
-                                  '</div>' +
-                                    '<div class="cfse-f-s3" style="margin-top:8px;display:none;font-size:12px;">' +
-                                    '<b>对象存储（S3 兼容）</b>' +
-                                    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px;">' +
-                                      '<label>Bucket<br/><input type="text" name="cf_hosting_targets[' + idx + '][bucket]" style="width:100%;" /></label>' +
-                                      '<label>Region（R2 填 auto）<br/><input type="text" name="cf_hosting_targets[' + idx + '][region]" style="width:100%;" value="auto" /></label>' +
-                                      '<label>Access Key<br/><input type="text" name="cf_hosting_targets[' + idx + '][access_key]" style="width:100%;" /></label>' +
-                                      '<label>Secret Key<br/><input type="password" autocomplete="new-password" name="cf_hosting_targets[' + idx + '][secret_key]" style="width:100%;" /></label>' +
-                                      '<label>公开访问地址 public_url<br/><input type="text" name="cf_hosting_targets[' + idx + '][public_url]" style="width:100%;" placeholder="https://cdn.example.com" /></label>' +
-                                      '<label>寻址方式<br/><select name="cf_hosting_targets[' + idx + '][path_style]" style="width:100%;"><option value="auto">自动</option><option value="path">path-style</option><option value="virtual">virtual-host</option></select></label>' +
-                                    '</div>' +
-                                  '</div>' +
-                                  '<div class="cfse-f-workerkey" style="margin-top:8px;font-size:12px;display:none;">' +
-                                    '<label>Auth Key<br/><input type="text" class="cfse-f-key" name="cf_hosting_targets[' + idx + '][auth_key]" style="width:100%;" /></label>' +
-                                    '<span class="description" style="font-size:12px;">Worker 的 X-Auth-Key —— 只有 cloudflare 模板用得到</span>' +
-                                  '</div>' +
-                                  '<div style="margin-top:8px;font-size:12px;">' +
-                                    '<label>路径前缀<br/><input type="text" name="cf_hosting_targets[' + idx + '][path_prefix]" style="width:100%;" placeholder="留空 = 目标根目录" /></label>' +
-                                  '</div>' +
-                                  '</div></div>';
-                                var host = document.getElementById('cfse-modals');
-                                if (host) host.insertAdjacentHTML('beforeend', modalHtml);
-                                var tr = tmp.firstElementChild;
-                                body.appendChild(tr);
-                                bind(tr);
-                                bindDetail(tr);
-                                syncRow(tr);   // 弹窗已建好，同步一次「模板相关块」的显隐
-                                idx++;
-                              });
-                              var testBtn = document.getElementById('cfse-test-targets');
-                              if (testBtn) testBtn.addEventListener('click', function(){
-                                var out = document.getElementById('cfse-test-result');
-                                out.textContent = '测试中…';
-                                jQuery.post(ajaxurl, { action: 'cfse_test_targets', _ajax_nonce: '<?php echo esc_js(wp_create_nonce('cfse_test_targets')); ?>' }, function(r){
-                                  if (!r || !r.success) { out.textContent = '测试失败'; return; }
-                                  out.innerHTML = (r.data.results || []).map(function(x){
-                                    return (x.ok ? '✅ ' : '❌ ') + x.name + '：' + x.detail;
-                                  }).join('　|　');
-                                }).fail(function(){ out.textContent = '请求失败'; });
-                              });
-                            })();
-                            </script>
 
                         </div>
                 <div class="cfse-card" style="margin-top:16px;">
@@ -384,6 +172,7 @@ class CFSE_Sync_Admin_UI {
     <h4 style="margin:14px 0 4px;">🔧 Worker端管理 <span class="dashicons dashicons-editor-help" title="创建 Worker 后台账号、同步路由、部署 Worker 代码。"></span></h4>
     <div class="cfse-grp-body">
         <details class="cfse-adv" style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">
+            <summary>👤 Worker 后台账号（高级）—— 忘了密码时用它重置</summary>
             <p class="description">
                 为 Worker 管理后台创建登录用户（PBKDF2-SHA256 存入 D1 <code>users</code> 表）。用户名默认取本站第一个管理员；
                 密码仅本次提交时使用、不落 WordPress。可在 Worker 后台登录后修改。
@@ -406,6 +195,7 @@ class CFSE_Sync_Admin_UI {
         </details>
 
         <details class="cfse-adv" style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;"
+                        <summary>🚀 部署 / 升级 CMS（高级）</summary>
                         <p class="description">
                             插件不再内嵌 Worker 源码副本 —— 部署时用的是**从 CMS 官方下载的发行包**，
                             这样插件里的代码永远不会和官方版本漂移。
@@ -877,6 +667,219 @@ class CFSE_Sync_Admin_UI {
             </tbody>
         </table>
         </div>
+        <!-- 站点列表的操作按钮与脚本（表格专属；「站点列表」折叠时才可见） -->
+                            <p style="margin-top:8px;">
+                                <button type="button" class="button" id="cfse-add-target">＋ 添加目标</button>
+                                <button type="button" class="button" id="cfse-test-targets">🔌 测试连通性</button>
+                                <span id="cfse-test-result" class="description" style="margin-left:8px;"></span>
+                                <span class="description" style="margin-left:8px;">（测试用的是<b>已保存</b>的配置，改动后请先保存）</span>
+                            </p>
+                            <script>
+                            (function(){
+                              var body = document.getElementById('cfse-targets-body');
+                              if (!body) return;
+                              var idx = body.querySelectorAll('tr.cfse-target-row').length;
+                              // 字段联动：按「模板」显隐字段组（B7②）
+                              //   cloudflare ⇒ endpoint + auth_key
+                              //   s3         ⇒ endpoint + s3 组（隐藏 auth_key）
+                              //   local      ⇒ dir（隐藏 endpoint / auth_key / s3）
+                              // 「⚙️ 配置」打开对应弹窗（弹窗互斥天然成立）
+                              function bindDetail(tr){
+                                var btn = tr.querySelector('.cfse-toggle-detail');
+                                if (!btn) return;
+                                btn.addEventListener('click', function(){
+                                  var m = document.getElementById(btn.getAttribute('data-modal'));
+                                  if (m) m.style.display = 'block';
+                                });
+                              }
+                              // 关闭弹窗（按钮或点遮罩）
+                              document.addEventListener('click', function(e){
+                                var t = e.target;
+                                if (t && t.classList && t.classList.contains('cfse-modal-close')) {
+                                  var box = t.closest ? t.closest('.cfse-target-modal') : null;
+                                  if (box) box.style.display = 'none';
+                                  return;
+                                }
+                                if (t && t.classList && t.classList.contains('cfse-target-modal')) {
+                                  t.style.display = 'none';
+                                }
+                              });
+                              // 模板 → 支持的能力（与 PHP get_hosting_templates() 一致；只有 cloudflare 支持 d1/render/cache）
+                              var TPL_CAPS = {
+                                'cloudflare': ['r2', 'd1', 'render', 'cache'],
+                                's3': ['r2']
+                              };
+                              var TPL_BLOCKS = {
+                                'cloudflare': '.cfse-f-cloudflare', 's3': '.cfse-f-s3'
+                              };
+                              function rowIdx(tr){
+                                var el = tr.querySelector('input[name^="cf_hosting_targets["]');
+                                var m = el ? String(el.name).match(/^cf_hosting_targets\[(\d+)\]/) : null;
+                                return m ? m[1] : null;
+                              }
+                              // 模板块内字段启停：隐藏块若仍可提交，其旧值会以同名键后写覆盖
+                              // 用户在可见块里的输入（PHP $_POST 同名键后写胜）⇒ 「保存不上」。
+                              // disabled 字段不随表单提交 ⇒ 每个目标只有当前模板块的字段会提交。
+                              function setBlockEnabled(block, on){
+                                if (!block) return;
+                                var fs = block.querySelectorAll('input,select,textarea');
+                                for (var i = 0; i < fs.length; i++) fs[i].disabled = !on;
+                              }
+                              function applyTemplate(tr, v, modal){
+                                // ① 弹窗里的「模板相关块」显隐 + 启停（弹窗在 #cfse-modals，不在 tr 内）
+                                Object.keys(TPL_BLOCKS).forEach(function(k){
+                                  var el = modal ? modal.querySelector(TPL_BLOCKS[k]) : null;
+                                  if (el) { el.style.display = (v === k) ? '' : 'none'; setBlockEnabled(el, v === k); }
+                                });
+                                // ② endpoint / Auth Key 的显示规则（这些字段都在弹窗里，必须从 modal 找）
+                                var ep = modal ? modal.querySelector('.cfse-f-endpoint') : null;
+                                var isCf = (v === 'cloudflare');
+                                if (ep) { ep.style.display = isCf ? '' : 'none'; ep.disabled = !isCf; }
+                                var wk = modal ? modal.querySelector('.cfse-f-workerkey') : null;
+                                if (wk) { wk.style.display = (v === 'cloudflare') ? '' : 'none'; setBlockEnabled(wk, v === 'cloudflare'); }
+                                // ③ 能力按模板可选范围置灰 / 启用（这一步就是「选模型 ⇒ 能力跟着变」）
+                                var idx = rowIdx(tr);
+                                if (idx !== null) {
+                                  var allow = TPL_CAPS[v] || ['r2'];
+                                  ['r2', 'd1', 'render', 'cache'].forEach(function(ck){
+                                    var box = tr.querySelector('input[name="cf_hosting_targets[' + idx + '][capabilities][' + ck + ']"]');
+                                    if (!box) return;
+                                    var ok = allow.indexOf(ck) !== -1;
+                                    box.disabled = !ok;
+                                    var lab = box.parentNode;
+                                    if (lab) {
+                                      lab.style.opacity = ok ? '' : '.45';
+                                      if (ok) lab.removeAttribute('title'); else lab.setAttribute('title', '该模板不支持此能力');
+                                    }
+                                    if (!ok) box.checked = false;
+                                  });
+                                }
+                              }
+                              // 表格行与弹窗里的 名称/模板 双向同步（改一处另一处跟着变 ⇒ 提交值一致）
+                              function bindSync(tr, modal){
+                                var idx = rowIdx(tr);
+                                if (idx === null) return;
+                                var q = 'cf_hosting_targets[' + idx + ']';
+                                var pairs = [
+                                  [tr.querySelector('input[name="' + q + '[name]"]'), modal ? modal.querySelector('input[name="' + q + '[name]"]') : null],
+                                  [tr.querySelector('select[name="' + q + '[template]"]'), modal ? modal.querySelector('select[name="' + q + '[template]"]') : null]
+                                ];
+                                pairs.forEach(function (p) {
+                                  var a = p[0], b = p[1];
+                                  if (!a || !b) return;
+                                  function mirror(src, dst) {
+                                    ['input', 'change'].forEach(function (ev) {
+                                      src.addEventListener(ev, function () {
+                                        if (dst.value !== src.value) dst.value = src.value;
+                                        if (src.tagName === 'SELECT') syncRow(tr);
+                                      });
+                                    });
+                                  }
+                                  mirror(a, b); mirror(b, a);
+                                });
+                              }
+                              function syncRow(tr){
+                                var tpl = tr.querySelector('.cfse-target-template');
+                                var v = tpl ? tpl.value : 'cloudflare';
+                                var openBtn = tr.querySelector('.cfse-toggle-detail');
+                                var modal = openBtn ? document.getElementById(openBtn.getAttribute('data-modal')) : null;
+                                applyTemplate(tr, v, modal);
+                              }
+                              function bind(tr){
+                                var tpl = tr.querySelector('.cfse-target-template');
+                                if (tpl) tpl.addEventListener('change', function(){ syncRow(tr); });
+                                var del = tr.querySelector('.cfse-del-target');
+                                if (del) del.addEventListener('click', function(){
+                                  // 关键：弹窗在 #cfse-modals 里、独立于表格行；不一起删掉的话，
+                                  // 弹窗里的 cf_hosting_targets[N][...] 仍会随表单提交 ⇒ 目标「删不掉」。
+                                  var ob = tr.querySelector('.cfse-toggle-detail');
+                                  if (ob) {
+                                    var mdl = document.getElementById(ob.getAttribute('data-modal'));
+                                    if (mdl && mdl.parentNode) mdl.parentNode.removeChild(mdl);
+                                  }
+                                  tr.parentNode.removeChild(tr);
+                                });
+                                bindSync(tr, tr.querySelector('.cfse-toggle-detail') ? document.getElementById(tr.querySelector('.cfse-toggle-detail').getAttribute('data-modal')) : null);
+                                syncRow(tr);
+                              }
+                              Array.prototype.forEach.call(body.querySelectorAll('tr.cfse-target-row'), function(tr){ bind(tr); bindDetail(tr); });
+                              var addBtn = document.getElementById('cfse-add-target');
+                              if (addBtn) addBtn.addEventListener('click', function(){
+                                var tmp = document.createElement('tbody');
+                                tmp.innerHTML = '<tr class="cfse-target-row">' +
+                                  '<td><input type="checkbox" name="cf_hosting_targets[' + idx + '][enabled]" value="1" checked /></td>' +
+                                  '<td><input type="text" name="cf_hosting_targets[' + idx + '][name]" style="width:100%;" placeholder="例如：备份站" /></td>' +
+                                  '<td><select name="cf_hosting_targets[' + idx + '][template]" class="cfse-target-template" style="width:100%;"><option value="cloudflare">Cloudflare（Worker + R2 + D1）</option><option value="s3">S3 兼容对象存储</option></select></td>' +
+                                  '<td class="cfse-sum"><div><b class="cfse-sum-dir">（保存后显示）</b></div><div style="font-size:11px;color:#646970;">目录与站点 id 将在保存后生成</div></td>' +
+                                  '<td style="white-space:nowrap;font-size:11px;">' +
+                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][r2]" value="1" checked /> 静态文件</label><br/>' +
+                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][d1]" value="1" checked /> 文章数据</label><br/>' +
+                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][render]" value="1" checked /> 渲染</label><br/>' +
+                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][cache]" value="1" checked /> 清缓存</label>' +
+                                  '</td>' +
+                                  '<td style="text-align:center;"><input type="checkbox" name="cf_hosting_targets[' + idx + '][is_default]" value="1" /></td>' +
+                                  '<td style="white-space:nowrap;"><button type="button" class="button cfse-toggle-detail" data-modal="cfse-modal-' + idx + '">⚙️ 配置</button> <button type="button" class="button cfse-del-target" title="删除该目标">✕</button></td>' +
+                                '</tr>';
+                                var modalHtml = '<div class="cfse-target-modal" id="cfse-modal-' + idx + '" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100000;font-size:13px;">' +
+                                  '<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:#fff;padding:18px 22px;font-size:13px;line-height:1.6;border-radius:6px;width:min(92vw,780px);max-height:86vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.3);">' +
+                                  '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><b style="font-size:15px;">⚙️ 站点配置</b><button type="button" class="button cfse-modal-close">关闭</button></div>' +
+                                  '<div style="padding-bottom:10px;border-bottom:1px solid #f0f0f1;margin-bottom:10px;">' +
+                                    '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;">' +
+                                      '<span style="color:#646970;"><code>（保存后生成）</code></span>' +
+                                      '<label>名称 <input type="text" name="cf_hosting_targets[' + idx + '][name]" style="width:150px;" placeholder="例如：备份站" /></label>' +
+                                      '<label>模板 <select name="cf_hosting_targets[' + idx + '][template]" class="cfse-target-template" style="width:auto;"><option value="cloudflare">Cloudflare（Worker + R2 + D1）</option><option value="s3">S3 兼容对象存储</option></select></label>' +
+                                      '<input type="hidden" name="cf_hosting_targets[' + idx + '][id]" value="" />' +
+                                    '</div>' +
+                                    '<div style="margin-top:8px;">' +
+                                      '<label>本地保存目录 <code>wp-content/cfse-static/</code><input type="text" name="cf_hosting_targets[' + idx + '][site_dir]" style="width:140px;" placeholder="留空 = 站点 id" /></label>' +
+                                      '<span class="description" style="font-size:12px;">（英文/数字/下划线/连字符；保存时会自动创建目录）</span>' +
+                                    '</div>' +
+                                  '</div>' +
+                                  '<div style="margin-top:8px;">' +
+                                    '<label>站点地址（Worker 域名）<br/><input type="text" class="cfse-f-endpoint" name="cf_hosting_targets[' + idx + '][endpoint]" style="width:100%;" placeholder="https://你的站点" /></label>' +
+                                    '<span class="description" style="font-size:12px;">Cloudflare 目标填 Worker 域名；保存时会同步为本站的「静态站点 URL」</span>' +
+                                  '</div>' +
+                                    '<div class="cfse-f-s3" style="margin-top:8px;display:none;font-size:12px;">' +
+                                    '<b>对象存储（S3 兼容）</b>' +
+                                    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px;">' +
+                                      '<label>Bucket<br/><input type="text" name="cf_hosting_targets[' + idx + '][bucket]" style="width:100%;" /></label>' +
+                                      '<label>Region（R2 填 auto）<br/><input type="text" name="cf_hosting_targets[' + idx + '][region]" style="width:100%;" value="auto" /></label>' +
+                                      '<label>Access Key<br/><input type="text" name="cf_hosting_targets[' + idx + '][access_key]" style="width:100%;" /></label>' +
+                                      '<label>Secret Key<br/><input type="password" autocomplete="new-password" name="cf_hosting_targets[' + idx + '][secret_key]" style="width:100%;" /></label>' +
+                                      '<label>公开访问地址 public_url<br/><input type="text" name="cf_hosting_targets[' + idx + '][public_url]" style="width:100%;" placeholder="https://cdn.example.com" /></label>' +
+                                      '<label>寻址方式<br/><select name="cf_hosting_targets[' + idx + '][path_style]" style="width:100%;"><option value="auto">自动</option><option value="path">path-style</option><option value="virtual">virtual-host</option></select></label>' +
+                                    '</div>' +
+                                  '</div>' +
+                                  '<div class="cfse-f-workerkey" style="margin-top:8px;font-size:12px;display:none;">' +
+                                    '<label>Auth Key<br/><input type="text" class="cfse-f-key" name="cf_hosting_targets[' + idx + '][auth_key]" style="width:100%;" /></label>' +
+                                    '<span class="description" style="font-size:12px;">Worker 的 X-Auth-Key —— 只有 cloudflare 模板用得到</span>' +
+                                  '</div>' +
+                                  '<div style="margin-top:8px;font-size:12px;">' +
+                                    '<label>路径前缀<br/><input type="text" name="cf_hosting_targets[' + idx + '][path_prefix]" style="width:100%;" placeholder="留空 = 目标根目录" /></label>' +
+                                  '</div>' +
+                                  '</div></div>';
+                                var host = document.getElementById('cfse-modals');
+                                if (host) host.insertAdjacentHTML('beforeend', modalHtml);
+                                var tr = tmp.firstElementChild;
+                                body.appendChild(tr);
+                                bind(tr);
+                                bindDetail(tr);
+                                syncRow(tr);   // 弹窗已建好，同步一次「模板相关块」的显隐
+                                idx++;
+                              });
+                              var testBtn = document.getElementById('cfse-test-targets');
+                              if (testBtn) testBtn.addEventListener('click', function(){
+                                var out = document.getElementById('cfse-test-result');
+                                out.textContent = '测试中…';
+                                jQuery.post(ajaxurl, { action: 'cfse_test_targets', _ajax_nonce: '<?php echo esc_js(wp_create_nonce('cfse_test_targets')); ?>' }, function(r){
+                                  if (!r || !r.success) { out.textContent = '测试失败'; return; }
+                                  out.innerHTML = (r.data.results || []).map(function(x){
+                                    return (x.ok ? '✅ ' : '❌ ') + x.name + '：' + x.detail;
+                                  }).join('　|　');
+                                }).fail(function(){ out.textContent = '请求失败'; });
+                              });
+                            })();
+                            </script>
         <div id="cfse-modals">
         <?php foreach ($this->target_modals as $mi => $mhtml) { ?>
             <div class="cfse-target-modal" id="cfse-modal-<?php echo (int) $mi; ?>" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100000;font-size:13px;">
@@ -900,8 +903,8 @@ class CFSE_Sync_Admin_UI {
             </div>
         <?php } ?>
         </details>
+    <?php
     }
-
 
     // ============================================
     // 站点（= 托管目标）辅助

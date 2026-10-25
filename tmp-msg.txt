@@ -1,0 +1,69 @@
+fix(ui): 修 PHP 模式断点 —— 7 个方法被当 HTML 文本输出
+
+## 事故
+
+部署到 192.168.2.2 后，设置页渲染直接**无限递归**（Maximum call stack size
+reached），页面出不来。
+
+## 根因
+
+class-admin-ui.php 的 render_hosting_targets_table() 末尾原本是：
+
+    <?php } ?>
+    </details>
+    <?php } ?>          ← 我加的
+
+`?>` 退出 PHP 模式后没有立刻用 `<?php` 恢复，导致后面 7 个方法
+（site_dir_of / get_recent_logs / get_export_stats /
+is_first_cloudflare_target / render_export_column /
+render_worker_sync_metabox / render_doc_format_metabox / render_site_metabox）
+**整段变成 HTML 文本输出**。
+
+后果：类里只剩 15 个方法（实际 23 个）。settings_page 调 $this->get_export_stats()
+→ 方法不存在 → 触发 __call → cfse_proxy → 反射调主类的 private get_export_stats
+→ 又调 Admin_UI::get_export_stats() → 死循环。
+
+**最难查的地方**：
+  · php -l 完全通过（语法合法 —— 因为那几行确实只是 HTML）
+  · 括号配平检查通过（类体 19 到 1151 正常闭合）
+  · token_get_all 显示类结构正常
+  · 唯一暴露问题的是 ReflectionClass 只列出 15 个方法
+=> 靠「反射列方法数 vs 源码 grep 方法数」对比才定位到。
+
+## 修复
+
+1. `</details>` 之后改为 `<?php` 恢复 + `}` 闭合方法（不再用 `?>` 退出）
+2. 两个折叠块补上 summary（Worker 后台账号 / 部署 CMS）——
+   之前换 h4 为 summary 时选错了位置，details 里没有 summary，
+   浏览器只显示一个空标题
+3. 旧表格 UI（按钮 + 200 行内联 JS）从「连接 CMS」卡片移到
+   render_hosting_targets_table() 里（它引用表格 DOM，表格在折叠区）
+
+## 新增 tools/check-php-modes.mjs
+
+扫 PHP 混排文件的「PHP 模式断点」：
+  ① 先标出所有 script/style 块的范围（JS/CSS 被当 HTML 是正常的）
+  ② 再切 PHP 段与 HTML 段
+  ③ HTML 段里若出现「行首是 PHP 代码」的行 => 报警
+
+自测：当前全仓零误报；注入一个真断点能准确报出行号。
+
+## 验证（192.168.2.2 真实登录态渲染）
+
+- 渲染 22626 字节，**零 PHP 错误**
+- 17 项结构断言全过（状态机横幅 / 连接卡片 / 三个折叠块 / 发行包下载 /
+  部署按钮 / 同步区 / 评论同步 / 站点信息同步 / 状态面板 / 基础配置 / 日志）
+- 类方法数从 15 恢复到 23
+
+## 服务器状态
+
+- 插件已部署到 /mnt/optane/webstack/www/wp-content/plugins/cfse-sync/
+- **激活状态已切：cf（全功能版）-> cfse-sync**
+- 旧目录备份在 cfse-sync.bak-before-v2/
+- 配置继承自原 cf：cf_site_url=https://yuebin.uk、cf_auth_key 已填
+- 旧 s3 / github 目标被正确跳过（本插件不支持这些 provider）
+
+## 顺带记一条
+
+WordPress 的 active_plugins 有 alloptions 缓存 —— 直接 UPDATE 数据库会被缓存挡住，
+get_option 返回 false、插件实际不加载。必须用 update_option() + wp_cache_delete('alloptions')。
