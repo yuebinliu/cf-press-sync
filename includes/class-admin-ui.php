@@ -1066,14 +1066,34 @@ class CFSE_Sync_Admin_UI {
     }
 
     public function get_export_stats() {
-        $post_counts = wp_count_posts('post');
-        $total_posts = isset($post_counts->publish) ? (int) $post_counts->publish : 0;
-        $exported = (int) get_option('cf_exported_count', 0);
+        global $wpdb;
+        $total_posts = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = %s AND post_status = %s",
+            'post', 'publish'
+        ));
+
+        /*
+         * 待同步 = 定时任务真正会挑的那批（既无 _cf_exported 也无 _cfse_synced_d1），
+         * 与 handle_auto_export() 的 meta_query 完全一致。
+         *
+         * 不能用 cf_exported_count 计数器：它只增不减地累加，遇到删稿、重建、手动改数据就会漂
+         * （现网就比实际多认了 2 篇，导致「待同步」显示 26 而真实是 28）。
+         */
+        $pending = (int) $wpdb->get_var(
+            "SELECT COUNT(*) FROM {$wpdb->posts} p
+              WHERE p.post_type = 'post' AND p.post_status = 'publish'
+                AND NOT EXISTS (
+                    SELECT 1 FROM {$wpdb->postmeta} pm
+                     WHERE pm.post_id = p.ID
+                       AND pm.meta_key IN ('_cf_exported', '_cfse_synced_d1')
+                )"
+        );
+        $exported = max(0, $total_posts - $pending);
         $last_export = get_option('cf_last_export_time', '从未');
         return array(
             'total_posts' => $total_posts,
-            'exported_posts' => min($exported, $total_posts),
-            'pending_posts' => max(0, $total_posts - $exported),
+            'exported_posts' => $exported,
+            'pending_posts' => $pending,
             'last_export' => $last_export === '从未' ? '从未' : $this->human_span(time() - strtotime($last_export), '前'),
             'progress' => $total_posts > 0 ? ($exported / $total_posts * 100) : 0,
         );
