@@ -165,17 +165,14 @@ class CFSE_Sync_Onboarding {
             </ol>
 
             <div class="cfse-hero-actions">
-                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_download_release')); ?>">
-                    <?php wp_nonce_field('cf_download_release'); ?>
-                    <button type="submit" class="button button-primary button-hero">⬇️ 下载 CMS 发行包</button>
-                </form>
+                <button type="submit" form="cfse-act-download" class="button button-primary button-hero">⬇️ 下载 CMS 发行包</button>
                 <a class="button" href="<?php echo esc_url(admin_url('options-general.php?page=cfse-sync&cfse_expand=deploy')); ?>">🚀 我要一步步部署（高级）</a>
                 <a class="button" href="<?php echo esc_url($rel::DEFAULT_SITE_URL . '/docs/cms-deploy/'); ?>" target="_blank" rel="noopener">📖 看图文教程</a>
             </div>
 
             <div class="cfse-note">
                 💡 <b>已经部署好了？</b> 不用点上面的按钮 —— 直接往下填连接信息就行。
-                往下滚动到「② 填连接信息」。
+                往下滚动到「📡 连接 CMS」卡片。
             </div>
 
             <?php if (isset($_GET['release_dl'])): ?>
@@ -230,7 +227,7 @@ class CFSE_Sync_Onboarding {
                 <span id="cfse-test-conn-result" class="cfse-dim"></span>
             </div>
             <p class="cfse-dim" style="margin:10px 0 0;font-size:12px;">
-                地址或密钥要改？到下面的「② 填连接信息」改完保存，再回来测试。
+                地址或密钥要改？到下面的「📡 连接 CMS」卡片改完保存，再回来测试。
             </p>
         </div>
         <?php
@@ -252,7 +249,7 @@ class CFSE_Sync_Onboarding {
                 CMS 在 <code style="font-size:13px;"><?php echo esc_html($p['endpoint']); ?></code>
             </p>
             <p class="cfse-dim" style="margin:0;font-size:12px;">
-                内容同步在下面「⚡ 同步内容」里操作。改 URL 结构、模板、外观都在 <b>CMS 后台</b>，不在这里。
+                内容同步在下面「🛠️ 同步设置」里操作。改 URL 结构、模板、外观都在 <b>CMS 后台</b>，不在这里。
             </p>
         </div>
         <?php

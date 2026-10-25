@@ -20,3 +20,6 @@ cms-package/
 Thumbs.db
 *.swp
 *~
+
+# 部署/检查脚本产生的临时产物（渲染出的 HTML 快照等）
+tmp/

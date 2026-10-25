@@ -104,7 +104,7 @@ class CFSE_Sync_Admin_UI {
                         <div class="cfse-card">
                             <h2 style="margin-top:0;">📡 连接 CMS</h2>
                             <p class="description">填你的 CMS 地址和同步密钥。密钥在 <b>CMS 后台 → ⚙️ 设置</b> 里看。
-                                多个 CMS 实例时，下面的「站点列表」可以再加。</p>
+                                <b>自托管单站</b>只需要这两个框。</p>
                             <?php $this->render_connection_form(); ?>
 
                         </div>
@@ -116,18 +116,9 @@ class CFSE_Sync_Admin_UI {
         <div class="cfse-grp-sub">拉取参数：</div>
         <label><input type="checkbox" name="cfse_pull_overwrite" value="1" form="cfse-pull-form" /> 拉取时覆盖同 ID 文章（以 Worker 版本为准）</label>
         <div class="cfse-actions" style="margin-top:10px;">
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_bulk_export')); ?>" style="display:inline;">
-                <?php wp_nonce_field('cf_bulk_export'); ?>
-                <button type="submit" class="button button-primary" onclick="return confirm('把全部已发布文章同步到 D1（单页由 Worker 渲染），确认继续？')">📤 全量同步到 D1</button>
-            </form>
-            <form id="cfse-pull-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_pull_worker')); ?>" style="display:inline;">
-                <?php wp_nonce_field('cf_pull_worker'); ?>
-                <button type="submit" class="button" onclick="return confirm('从 Worker 拉取「Worker 端诞生」的文章到 WordPress，确认继续？')">☁️ 从 Worker 拉取</button>
-            </form>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_clear_cache')); ?>" style="display:inline;">
-                <?php wp_nonce_field('cf_clear_cache'); ?>
-                <button type="submit" class="button" onclick="return confirm('重置同步标记？只清 WP 侧记账，不碰 D1 / R2 / 缓存。')">♻️ 重置同步标记</button>
-            </form>
+            <button type="submit" form="cfse-act-bulk" class="button button-primary" onclick="return confirm('把全部已发布文章同步到 D1（单页由 Worker 渲染），确认继续？')">📤 全量同步到 D1</button>
+            <button type="submit" form="cfse-pull-form" class="button" onclick="return confirm('从 Worker 拉取「Worker 端诞生」的文章到 WordPress，确认继续？')">☁️ 从 Worker 拉取</button>
+            <button type="submit" form="cfse-act-clear" class="button" onclick="return confirm('重置同步标记？只清 WP 侧记账，不碰 D1 / R2 / 缓存。')">♻️ 重置同步标记</button>
         </div>
     </div>
 </div>
@@ -155,10 +146,7 @@ class CFSE_Sync_Admin_UI {
     <h4 style="margin:14px 0 4px;">🔁 站点信息同步 <span class="dashicons dashicons-editor-help" title="只同步基础字段：站点名 / 描述 / URL / 存储结构 / 时区 / 默认作者。导航菜单、单页布局、文档库映射、logo、横幅、社交、评论 全部由 CMS 后台维护，永远不会被覆盖。"></span></h4>
     <div class="cfse-grp-body">
         <p class="description" style="margin-top:0;">WP 侧<b>不再自动</b>把站点信息写进 D1（改站点标题/描述、同步模板、初始化部署 都不会写）。需要把当前 WP 站点信息推给线上 CMS 时点下面的按钮 —— <b>合并写入</b>，不会动 CMS 后台独有的设置。</p>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_sync_site_info')); ?>" style="display:inline;">
-            <?php wp_nonce_field('cf_sync_site_info'); ?>
-            <button type="submit" class="button">🔄 同步站点设置到 D1</button>
-        </form>
+        <button type="submit" form="cfse-act-siteinfo" class="button">🔄 同步站点设置到 D1</button>
         <?php if (isset($_GET['site_info_synced'])): ?>
             <?php if ($_GET['site_info_synced'] === '1'): ?>
                 <div class="notice notice-success is-dismissible" style="margin:10px 0 0;"><p>✅ 站点基础信息已合并写入 D1（导航菜单 / 单页布局 / 文档库映射 未被改动）。</p></div>
@@ -178,15 +166,12 @@ class CFSE_Sync_Admin_UI {
                 密码仅本次提交时使用、不落 WordPress。可在 Worker 后台登录后修改。
             </p>
             <?php $seed_admin = get_users(array('role' => 'administrator', 'number' => 1)); $seed_u = !empty($seed_admin) ? $seed_admin[0] : null; ?>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_seed_admin')); ?>" style="margin-top:6px;">
-                <?php wp_nonce_field('cf_seed_admin'); ?>
-                <label>用户名 <input type="text" name="cf_admin_username" value="<?php echo esc_attr($seed_u ? $seed_u->user_login : 'admin'); ?>" /></label>
+                <label>用户名 <input type="text" form="cfse-act-seed" name="cf_admin_username" value="<?php echo esc_attr($seed_u ? $seed_u->user_login : 'admin'); ?>" /></label>
                 &nbsp;
-                <label>初始密码 <input type="password" name="cf_admin_password" autocomplete="new-password" required /></label>
+                <label>初始密码 <input type="password" form="cfse-act-seed" name="cf_admin_password" autocomplete="new-password" required /></label>
                 &nbsp;
-                <label>邮箱 <input type="email" name="cf_admin_email" value="<?php echo esc_attr($seed_u ? $seed_u->user_email : ''); ?>" /></label>
-                <button type="submit" class="button button-primary">👤 写入 Worker 后台用户</button>
-            </form>
+                <label>邮箱 <input type="email" form="cfse-act-seed" name="cf_admin_email" value="<?php echo esc_attr($seed_u ? $seed_u->user_email : ''); ?>" /></label>
+                <button type="submit" form="cfse-act-seed" class="button button-primary">👤 写入 Worker 后台用户</button>
             <?php if (isset($_GET['seeded']) && $_GET['seeded'] === '1'): ?>
                 <div class="notice notice-success is-dismissible" style="margin:8px 0 0;"><p>✅ Worker 后台用户已写入 D1（需「🚀 初始化部署」后，Worker 的 /api/login 才能用新用户登录）。</p></div>
             <?php elseif (isset($_GET['seeded']) && $_GET['seeded'] === '0'): ?>
@@ -194,10 +179,10 @@ class CFSE_Sync_Admin_UI {
             <?php endif; ?>
         </details>
 
-        <details class="cfse-adv" style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;"
+        <details class="cfse-adv" style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;"<?php echo (isset($_GET['cfse_expand']) && $_GET['cfse_expand'] === 'deploy') ? ' open' : ''; ?>>
                         <summary>🚀 部署 / 升级 CMS（高级）</summary>
                         <p class="description">
-                            插件不再内嵌 Worker 源码副本 —— 部署时用的是**从 CMS 官方下载的发行包**，
+                            插件不再内嵌 Worker 源码副本 —— 部署时用的是<b>从 CMS 官方下载的发行包</b>，
                             这样插件里的代码永远不会和官方版本漂移。
                         </p>
                         <?php
@@ -224,21 +209,15 @@ class CFSE_Sync_Admin_UI {
                             <?php endif; ?>
                         <?php endif; ?>
                         <div style="margin: 10px 0; display: flex; gap: 10px; flex-wrap: wrap;">
-                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_download_release')); ?>" style="display:inline;">
-                                <?php wp_nonce_field('cf_download_release'); ?>
-                                <button type="submit" class="button">⬇️ 下载 CMS 发行包</button>
-                            </form>
-                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_deploy_worker')); ?>" style="display:inline;">
-                                <?php wp_nonce_field('cf_deploy_worker'); ?>
-                                <button type="submit" class="button button-primary" onclick="return confirm('把 CMS 发行包部署到 Cloudflare？需本机已登录 wrangler。')">🚀 部署到 Cloudflare</button>
-                            </form>
+                            <button type="submit" form="cfse-act-download" class="button">⬇️ 下载 CMS 发行包</button>
+                            <button type="submit" form="cfse-act-deploy" class="button button-primary" onclick="return confirm('把 CMS 发行包部署到 Cloudflare？需本机已登录 wrangler。')">🚀 部署到 Cloudflare</button>
                         </div>
                         <p class="description" style="font-size:12px;color:#999;">
                             下载源（按顺序尝试）：GitHub Releases → 官网 <code><?php echo esc_html(get_option('cf_cms_package_url', CFSE_Sync_Release::DEFAULT_SITE_URL)); ?></code> → 固定生产地址。
                             官网地址可在下方「基础配置」里改。<br/>
                             💡 模板与风格由 Worker 后台的「🎨 模板编辑器」维护（存 R2 <code>wp-content/themes/&lt;id&gt;/tpl.json</code>），插件侧不打包模板。
                         </p>
-                    </div>
+                    </details>
     </div>
 </div>
 
@@ -295,12 +274,47 @@ class CFSE_Sync_Admin_UI {
                     </div>
 </div>
             </div>
-                </div>
 
                         <div style="text-align:right;margin-top:18px;">
                             <button type="submit" form="cfse-options" class="button button-primary button-hero">保存配置</button>
                         </div>
                 </form>
+            </div><!-- /.wrap.cfse-settings -->
+
+<?php
+/*
+ * 操作类表单集中放在这里 —— 必须在主表单 #cfse-options 之外。
+ *
+ * 为什么：HTML5 不允许 form 嵌套。浏览器解析到内层 <form> 起始标签会**丢弃**它，
+ * 但内层的 </form> 结束标签会把**外层主表单关掉** —— 结果主表单从第一个操作按钮处
+ * 就断了，后面「基础配置」里的 cf_batch_size 等字段全部落在表单外，点「保存配置」
+ * 一个字段都存不进去（实测：9 个字段丢失）。所以内层一律不用 form，改用
+ * <button form="id"> 关联到这里的独立表单。改这里时别把它们挪回网格里。
+ */
+?>
+<div id="cfse-action-forms" style="display:none;">
+    <form id="cfse-act-bulk" method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_bulk_export')); ?>">
+        <?php wp_nonce_field('cf_bulk_export'); ?>
+    </form>
+    <form id="cfse-pull-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_pull_worker')); ?>">
+        <?php wp_nonce_field('cf_pull_worker'); ?>
+    </form>
+    <form id="cfse-act-clear" method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_clear_cache')); ?>">
+        <?php wp_nonce_field('cf_clear_cache'); ?>
+    </form>
+    <form id="cfse-act-siteinfo" method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_sync_site_info')); ?>">
+        <?php wp_nonce_field('cf_sync_site_info'); ?>
+    </form>
+    <form id="cfse-act-seed" method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_seed_admin')); ?>">
+        <?php wp_nonce_field('cf_seed_admin'); ?>
+    </form>
+    <form id="cfse-act-download" method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_download_release')); ?>">
+        <?php wp_nonce_field('cf_download_release'); ?>
+    </form>
+    <form id="cfse-act-deploy" method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_deploy_worker')); ?>">
+        <?php wp_nonce_field('cf_deploy_worker'); ?>
+    </form>
+</div>
 
 <style>
         .cfse-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 460px); gap: 20px; align-items: start; margin-top: 20px; align-items: start; }

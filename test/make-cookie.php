@@ -19,5 +19,5 @@ $expiration = time() + 3600;
 $cookie = wp_generate_auth_cookie($user->ID, $expiration, 'logged_in');
 
 echo (LOGGED_IN_COOKIE . '=' . $cookie) . "\n";
-echo '# 用户: ' . $user->user_login . ' (ID ' . $user->ID . ')\n";
+echo '# 用户: ' . $user->user_login . ' (ID ' . $user->ID . ')' . "\n";
 echo '# 有效期至: ' . date('Y-m-d H:i:s', $expiration) . "\n";

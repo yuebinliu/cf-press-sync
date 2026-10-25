@@ -62,6 +62,28 @@ plink -ssh -pw vr50we root@$HOST \
   "docker exec $CONTAINER php $CONTAINER_DIR/test/render-settings.php 2>&1" \
   2>/dev/null | grep -vE "opcache|Warning: PHP Startup" | grep -E "渲染|错误|状态|连接"
 
+echo "=== ⑧ 渲染产物 HTML 结构体检 ==="
+# 取回服务器上真实渲染出的 HTML，离线做标签配平 / 嵌套 form / 属性截断检查。
+# 这两项是 2026-10-25 「设置页冲破」事故的回归门禁：
+#   · 标签不配平 ⇒ 布局错位、右栏被折叠块吞掉
+#   · 嵌套 form ⇒ 主表单被提前关闭，基础配置字段全部落在表单外（保存不生效）
+RENDERED="$SRC/tmp/cfse-settings.rendered.html"
+mkdir -p "$SRC/tmp"
+plink -ssh -pw vr50we root@$HOST \
+  "docker exec $CONTAINER cat /tmp/cfse-settings.html" 2>/dev/null > "$RENDERED"
+if [ ! -s "$RENDERED" ]; then
+  echo "  ✗ 没能取回渲染产物（/tmp/cfse-settings.html 为空）"; exit 1
+fi
+node tools/check-html-structure.mjs "$RENDERED"
+
+# form owner / 布局检查需要 html5lib；装了就跑，没装只提示、不阻断
+PY="${CFSE_PYTHON:-python}"
+if "$PY" -c "import html5lib" >/dev/null 2>&1; then
+  "$PY" tools/check-rendered-page.py "$RENDERED" || exit 1
+else
+  echo "  ⚠ 跳过 form owner / 布局检查（当前 python 缺 html5lib；设 CFSE_PYTHON 指向装好它的解释器）"
+fi
+
 echo
 echo "✓ 部署完成"
 echo "  插件目录: $REMOTE_DIR"
