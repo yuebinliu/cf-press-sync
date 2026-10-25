@@ -100,10 +100,21 @@ class CFSE_Sync_Admin_UI {
                 <div class="cfse-grid">
                     <div class="cfse-col cfse-col-main">
 
-                        <!-- ① 连接 CMS -->
+                        <!-- ① 连接 CMS（已连接时默认收起，只留一行地址） -->
+                        <?php
+                        $conn = CFSE_Sync_Onboarding::get_instance()->get_primary();
+                        $conn_ok = ($conn['endpoint'] !== '' && $conn['auth_key'] !== '');
+                        ?>
                         <div class="cfse-card">
                             <h2>📡 连接 CMS</h2>
-                            <?php $this->render_connection_form(); ?>
+                            <?php if ($conn_ok): ?>
+                                <details class="cfse-adv cfse-adv-flat">
+                                    <summary>✅ 已连接 <code><?php echo esc_html($conn['endpoint']); ?></code><span class="cfse-sum-extra">点开可改地址 / 密钥</span></summary>
+                                    <?php $this->render_connection_form(); ?>
+                                </details>
+                            <?php else: ?>
+                                <?php $this->render_connection_form(); ?>
+                            <?php endif; ?>
                         </div>
 
                         <!-- ② 同步设置 -->
@@ -161,11 +172,24 @@ class CFSE_Sync_Admin_UI {
                             <details class="cfse-adv">
                                 <summary>⚙️ 同步参数</summary>
                                 <div class="cfse-inline">
-                                    <label>定时每批 <input type="number" id="cf_batch_size" name="cf_batch_size" value="<?php echo esc_attr($this->config['batch_size']); ?>" class="small-text" min="1" /> 篇</label>
+                                    <label>每日定时推 <input type="number" id="cf_batch_size" name="cf_batch_size" value="<?php echo esc_attr($this->config['batch_size']); ?>" class="small-text" min="1" /> 篇文章</label>
                                     <label>失败重试 <input type="number" id="cf_max_retries" name="cf_max_retries" value="<?php echo esc_attr($this->config['max_retries']); ?>" class="small-text" min="1" /> 次</label>
                                     <label class="cfse-check"><input type="checkbox" name="cf_enable_logging" value="1" <?php checked($this->config['enable_logging']); ?> /> 记录日志</label>
                                 </div>
-                                <p class="description">「定时每批」只影响每日定时任务，手动同步不受此限。关掉「记录日志」后右侧日志面板不再更新。</p>
+                                <?php
+                                // 用当前待同步篇数算出「按这个速度要补几天」，避免把值设小了还没察觉
+                                $bs = max(1, (int) $this->config['batch_size']);
+                                $pend = (int) $stats['pending_posts'];
+                                ?>
+                                <p class="description">
+                                    「每日定时推」= 每天那个补推任务一次推几篇<b>文章</b>。手动「同步文章到 CMS」不受此限（一次跑完）。
+                                    <?php if ($pend > 0): ?>
+                                        <br/>当前待同步 <b><?php echo esc_html($pend); ?></b> 篇，按 <?php echo esc_html($bs); ?> 篇/天算要 <b><?php echo esc_html((int) ceil($pend / $bs)); ?></b> 天补完。
+                                    <?php else: ?>
+                                        <br/>当前没有待同步文章。
+                                    <?php endif; ?>
+                                    <br/>关掉「记录日志」后右侧日志面板不再更新。
+                                </p>
                             </details>
 
                             <details class="cfse-adv">
@@ -393,6 +417,15 @@ class CFSE_Sync_Admin_UI {
         .cfse-adv > *:not(summary) { margin-left: 16px; margin-right: 16px; }
         .cfse-adv > *:not(summary):first-of-type { margin-top: 14px; }
         .cfse-adv > *:not(summary):last-child { margin-bottom: 16px; }
+
+        /* 卡片内的「已连接」折叠：去掉内层边框，只留一行 + 三角 */
+        .cfse-adv-flat { border: 0; background: transparent; }
+        .cfse-adv-flat > summary { padding: 4px 0; color: #1d2327; }
+        .cfse-adv-flat > summary:hover { background: transparent; }
+        .cfse-adv-flat[open] > summary { border-bottom: 0; margin-bottom: 10px; }
+        .cfse-adv-flat > *:not(summary) { margin-left: 0; margin-right: 0; }
+        .cfse-adv-flat > *:not(summary):last-child { margin-bottom: 0; }
+        .cfse-sum-extra { margin-left: 10px; font-weight: 400; color: #787c82; font-size: 13px; }
 
         .version { font-size: 14px; color: #646970; font-weight: normal; }
 
@@ -686,8 +719,7 @@ class CFSE_Sync_Admin_UI {
         </div>
         <?php if ($multi): ?>
             <p class="description" style="margin-top:10px;">
-                ⚠️ 检测到 <b><?php echo count($targets); ?></b> 个站点。修改只会作用于第一个（主站点）；
-                其余的在下方「站点列表」里管理。
+                ⚠️ 检测到 <b><?php echo count($targets); ?></b> 个同步目标。这里只改第一个（主站点）。
             </p>
         <?php endif; ?>
         <?php
