@@ -76,6 +76,7 @@ $cfse_required_modules = array(
     'includes/class-admin-ui.php',
     'includes/class-worker-cms.php',
     'includes/class-release.php',
+    'includes/class-onboarding.php',
     'includes/class-compat.php',
 );
 $cfse_missing_modules = array();
@@ -99,6 +100,7 @@ require_once CFSE_PLUGIN_DIR . 'includes/class-transports.php';
 require_once CFSE_PLUGIN_DIR . 'includes/class-admin-ui.php';
 require_once CFSE_PLUGIN_DIR . 'includes/class-worker-cms.php';
 require_once CFSE_PLUGIN_DIR . 'includes/class-release.php';
+require_once CFSE_PLUGIN_DIR . 'includes/class-onboarding.php';
 require_once CFSE_PLUGIN_DIR . 'includes/class-compat.php';
 // 上面几个临时变量会落到全局作用域，用完清掉
 unset($cfse_required_modules, $cfse_missing_modules, $cfse_mod);
@@ -183,6 +185,7 @@ class CFSE_Sync_Plugin {
 		add_action('admin_post_cfse_align_worker', array($this, 'handle_align_worker'));
 		add_action('wp_ajax_cfse_worker_status', array($this, 'ajax_worker_status'));
 		add_action('wp_ajax_cfse_test_targets', array($this, 'ajax_test_targets'));
+		add_action('wp_ajax_cfse_test_connection', array($this, 'ajax_test_connection'));
 		// 优先级 5：必须早于导出钩子（save_post 优先级 10），否则本次导出读到的是旧标记
 		add_action('save_post', array($this, 'save_doc_format_meta'), 5, 3);
 		add_action('save_post', array($this, 'save_site_meta'), 5, 3);
@@ -222,13 +225,22 @@ class CFSE_Sync_Plugin {
     private function load_config() {
         // 多托管配置：先算出目标列表，再由「首个 cfse-worker 目标」派生 site_url / auth_key。
         // 这样 d1_batch / purge 等仍只读 site_url/auth_key 的代码无需改动，行为与之前一致。
+        //
+        // 2026-10-25：设置页改成了「连接 CMS」单表单（endpoint + auth_key 两个框），
+        // 存在 option cf_site_url / cf_auth_key 里。这两个是**主目标的真源** ——
+        // 用户在单表单里改的就是它们，多目标表格里的第一行会被同步过来（见下）。
         $targets = $this->get_hosting_targets();
         $primary = array();
         foreach ($targets as $t) {
             if (isset($t['type']) && $t['type'] === 'cfse-worker') { $primary = $t; break; }
         }
-        $primary_url = !empty($primary['endpoint']) ? $primary['endpoint'] : get_option('cf_site_url', get_site_url());
-        $primary_key = isset($primary['auth_key']) ? $primary['auth_key'] : get_option('cf_auth_key', '');
+        // 主目标优先；但若单表单里填了值，以单表单为准（它是用户直接面对的入口）
+        $single_url = trim((string) get_option('cf_site_url', ''));
+        $single_key = (string) get_option('cf_auth_key', '');
+        $primary_url = $single_url !== '' ? $single_url
+            : (!empty($primary['endpoint']) ? $primary['endpoint'] : get_site_url());
+        $primary_key = $single_key !== '' ? $single_key
+            : (isset($primary['auth_key']) ? $primary['auth_key'] : '');
         $this->config = array(
             'account_id' => get_option('cf_account_id', ''),
             'api_token' => get_option('cf_api_token', ''),
@@ -1348,6 +1360,73 @@ public function handle_deploy_worker() {
 
     /** AJAX：查询该篇在 Worker 端与本地的版本时间（编辑页异步调用，不阻塞页面渲染） */
     /** AJAX：测试各托管目标的连通性（用已保存的配置） */
+    /**
+     * 测试与 CMS 的连接（状态机用的那个）。
+     *
+     * 与 ajax_test_targets 的区别：这里只测**主目标**，并且在测通时把状态记成
+     * 「已连接」—— 状态机据此决定显示哪一屏。
+     */
+    public function ajax_test_connection() {
+        if (!current_user_can('manage_options')) wp_send_json_error(array('error' => '无权限'), 403);
+        check_ajax_referer('cfse_test_connection');
+
+        $onb = CFSE_Sync_Onboarding::get_instance();
+        $p = $onb->get_primary();
+
+        // 表单里传的值优先 —— 用户可能还没保存就想先测一下。
+        // （传入为空时才回落到已保存的 option）
+        $req_endpoint = isset($_POST['endpoint']) ? trim((string) wp_unslash($_POST['endpoint'])) : '';
+        $req_key     = isset($_POST['auth_key']) ? trim((string) wp_unslash($_POST['auth_key'])) : '';
+        if ($req_endpoint !== '') $p['endpoint'] = rtrim($req_endpoint, '/');
+        if ($req_key !== '') $p['auth_key'] = $req_key;
+
+        if ($p['endpoint'] === '') {
+            wp_send_json_error(array('error' => '还没填 CMS 地址'));
+        }
+        if ($p['auth_key'] === '') {
+            wp_send_json_error(array('error' => '还没填同步密钥'));
+        }
+
+        $target = array(
+            'id' => 'primary',
+            'name' => $p['name'] !== '' ? $p['name'] : 'CMS',
+            'type' => 'cfse-worker',
+            'endpoint' => $p['endpoint'],
+            'auth_key' => $p['auth_key'],
+        );
+
+        // 用受保护接口测：401 能明确指向「密钥不对」（/health 不需要认证，证明不了 key）
+        $resp = $this->worker_request($target, '/style-list', 'GET', null, 15);
+        if ($resp === null) {
+            $onb->mark_unconnected();
+            wp_send_json_error(array('error' => '网络不可达或连接失败（检查地址是否可以访问）'));
+        }
+        $code = (int) wp_remote_retrieve_response_code($resp);
+        if ($code === 200) {
+            $onb->mark_connected();
+            // 顺带报一下 CMS 的站点名，让用户确认连对了
+            $info = array();
+            try {
+                $r2 = $this->worker_request($target, '/sync/site-info', 'GET', null, 10);
+                if ($r2 !== null && (int) wp_remote_retrieve_response_code($r2) === 200) {
+                    $j = json_decode((string) wp_remote_retrieve_body($r2), true);
+                    if (is_array($j)) $info = $j;
+                }
+            } catch (Throwable $e) { /* 拿不到就算了，不影响连接判定 */ }
+            wp_send_json_success(array(
+                'message' => '连接成功',
+                'siteName' => isset($info['name']) ? $info['name'] : '',
+                'storagePattern' => isset($info['storagePattern']) ? $info['storagePattern'] : '',
+            ));
+        }
+        $onb->mark_unconnected();
+        if ($code === 401 || $code === 403) {
+            wp_send_json_error(array('error' => '同步密钥不对（HTTP ' . $code . '）'));
+        }
+        wp_send_json_error(array('error' => 'HTTP ' . $code));
+    }
+
+
     public function ajax_test_targets() {
         if (!current_user_can('manage_options')) wp_send_json_error(array('error' => '无权限'), 403);
         check_ajax_referer('cfse_test_targets');

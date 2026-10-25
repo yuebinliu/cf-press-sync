@@ -202,6 +202,13 @@ class CFSE_Sync_Transports {
         }
         $templates = $this->get_hosting_templates();
         $out = array();
+
+        // 2026-10-25：设置页改成了「连接 CMS」单表单，option cf_site_url / cf_auth_key
+        // 是主目标的真源。这里把**第一个**目标的 endpoint / auth_key 与之对齐 ——
+        // 否则用户在单表单里改了地址，多目标表格里的旧值还在，for_each_target
+        // 会拿旧地址去请求（表现为「改了没生效」）。
+        $single_url = trim((string) get_option('cf_site_url', ''));
+        $single_key = (string) get_option('cf_auth_key', '');
         $usedNumIds = array(); $usedNumDirs = array(); $seenDefaultRt = false;
         foreach ($list as $t) {
             if (!is_array($t)) continue;
@@ -266,6 +273,11 @@ class CFSE_Sync_Transports {
             $usedNumDirs[$t['site_dir']] = $numId;
             $t['is_default'] = empty($t['is_default']) ? false : true;
             if (!$seenDefaultRt && $t['is_default']) { $seenDefaultRt = true; } elseif ($t['is_default']) { $t['is_default'] = false; }
+            // 第一个目标与「连接 CMS」单表单对齐（单表单是主目标的真源）
+            if (empty($out) && $t['type'] === 'cfse-worker') {
+                if ($single_url !== '') $t['endpoint'] = $single_url;
+                if ($single_key !== '') $t['auth_key'] = $single_key;
+            }
             $out[] = $t;
         }
         return $out;
@@ -318,8 +330,13 @@ class CFSE_Sync_Transports {
             'template' => 'cloudflare',
             'type' => 'cfse-worker',
             'enabled' => true,
-            'endpoint' => rtrim(get_option('cf_site_url', get_site_url()), '/'),
-            'auth_key' => get_option('cf_auth_key', ''),
+            // ⚠️ 2026-10-25：这里**不能**回落到 get_site_url()。
+            //   回落到本站地址会让「未连接」状态被误判成「已配置」——
+            //   用户根本没填 CMS 地址，插件却拿自己站点的 URL 去请求，
+            //   同步会打到自己的 WordPress 上。
+            //   正确行为：没填就是空串（= 未连接），由设置页引导用户去填。
+            'endpoint' => rtrim((string) get_option('cf_site_url', ''), '/'),
+            'auth_key' => (string) get_option('cf_auth_key', ''),
             'path_prefix' => '',
             'capabilities' => $caps,
         );

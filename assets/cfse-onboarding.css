@@ -1,0 +1,137 @@
+
+/* ============================================
+   三屏状态机（2026-10-25）
+   ============================================ */
+
+/* 高级层折叠块 */
+.cfse-adv {
+    margin-top: 16px;
+    border: 1px solid #dcdcde;
+    border-radius: 8px;
+    background: #f6f7f7;
+    padding: 0;
+}
+
+.cfse-adv > summary {
+    cursor: pointer;
+    padding: 12px 16px;
+    font-weight: 600;
+    font-size: 14px;
+    color: #1d2327;
+    list-style: none;
+    user-select: none;
+}
+
+.cfse-adv > summary::-webkit-details-marker {
+    display: none;
+}
+
+.cfse-adv > summary::before {
+    content: '▸';
+    display: inline-block;
+    width: 18px;
+    color: #787c82;
+    transition: transform 0.15s ease;
+}
+
+.cfse-adv[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.cfse-adv > summary:hover {
+    background: #f0f0f1;
+}
+
+.cfse-adv[open] > summary {
+    border-bottom: 1px solid #dcdcde;
+}
+
+/* details 里的内容要有内边距 */
+.cfse-adv > *:not(summary) {
+    margin-left: 16px;
+    margin-right: 16px;
+}
+
+.cfse-adv > *:not(summary):last-child {
+    margin-bottom: 16px;
+}
+
+/* 状态机 hero 卡片 */
+.cfse-hero {
+    border-left: 4px solid #2271b1;
+}
+
+.cfse-hero-ok {
+    border-left-color: #00a32a;
+}
+
+.cfse-hero h2 {
+    border-bottom: none !important;
+    padding-bottom: 0 !important;
+}
+
+.cfse-steps {
+    margin: 0 0 16px 0;
+    padding-left: 22px;
+    font-size: 13.5px;
+    line-height: 1.7;
+}
+
+.cfse-steps li {
+    margin-bottom: 10px;
+}
+
+.cfse-steps b {
+    font-size: 14px;
+}
+
+.cfse-dim {
+    color: #646970;
+    font-size: 13px;
+}
+
+.cfse-hero-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin: 12px 0;
+}
+
+.cfse-hero-actions form {
+    display: inline;
+    margin: 0;
+}
+
+.cfse-note {
+    background: #f0f6fc;
+    border-left: 3px solid #2271b1;
+    padding: 10px 14px;
+    font-size: 13px;
+    line-height: 1.6;
+    margin-top: 14px;
+}
+
+/* 连接信息表格 */
+.cfse-conn-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    margin: 4px 0 14px;
+}
+
+.cfse-conn-table th {
+    text-align: left;
+    font-weight: 500;
+    color: #646970;
+    padding: 8px 12px 8px 0;
+    vertical-align: top;
+    white-space: nowrap;
+    border-bottom: 1px solid #f0f0f1;
+}
+
+.cfse-conn-table td {
+    padding: 8px 0;
+    border-bottom: 1px solid #f0f0f1;
+    overflow-wrap: anywhere;
+}

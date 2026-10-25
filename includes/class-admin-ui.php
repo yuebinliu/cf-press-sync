@@ -99,12 +99,15 @@ class CFSE_Sync_Admin_UI {
             <form method="post" action="options.php" id="cfse-options">
                 <div class="cfse-grid">
 <div class="cfse-col">
+                        <!-- ① 状态机横幅：按「未连接 / 已配置 / 已连接」显示不同内容 -->
+                        <?php CFSE_Sync_Onboarding::get_instance()->render_current_screen(); ?>
+
+                        <!-- ② 连接 CMS（基础层，永远可见） -->
                         <div class="cfse-card">
-                            <h2 style="margin-top:0;">🎯 托管目标</h2>
-                            <p class="description">一个目标 = 一个线上站点。<b>Cloudflare</b> 模板支持 R2（文件）+ D1（文章数据）+ 渲染 + 缓存，
-                                是本插件的标准用法；<b>S3</b> 模板只写文件、不含 D1，适合把媒体另存一份。
-                                <b>平台凭证（Account ID / API Token / R2 Bucket / D1 Database ID）</b>在任意 <code>cloudflare</code> 目标的「⚙️ 配置」里填。</p>
-                            <?php $this->render_hosting_targets_table(); ?>
+                            <h2 style="margin-top:0;">📡 连接 CMS</h2>
+                            <p class="description">填你的 CMS 地址和同步密钥。密钥在 <b>CMS 后台 → ⚙️ 设置</b> 里看。
+                                多个 CMS 实例时，下面的「站点列表」可以再加。</p>
+                            <?php $this->render_connection_form(); ?>
                             <p style="margin-top:8px;">
                                 <button type="button" class="button" id="cfse-add-target">＋ 添加目标</button>
                                 <button type="button" class="button" id="cfse-test-targets">🔌 测试连通性</button>
@@ -382,8 +385,7 @@ class CFSE_Sync_Admin_UI {
 <div class="cfse-sec">
     <h4 style="margin:14px 0 4px;">🔧 Worker端管理 <span class="dashicons dashicons-editor-help" title="创建 Worker 后台账号、同步路由、部署 Worker 代码。"></span></h4>
     <div class="cfse-grp-body">
-        <div style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">
-            <h4 style="margin-top:0;">👤 Worker 后台账号</h4>
+        <details class="cfse-adv" style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">
             <p class="description">
                 为 Worker 管理后台创建登录用户（PBKDF2-SHA256 存入 D1 <code>users</code> 表）。用户名默认取本站第一个管理员；
                 密码仅本次提交时使用、不落 WordPress。可在 Worker 后台登录后修改。
@@ -403,10 +405,9 @@ class CFSE_Sync_Admin_UI {
             <?php elseif (isset($_GET['seeded']) && $_GET['seeded'] === '0'): ?>
                 <div class="notice notice-error is-dismissible" style="margin:8px 0 0;"><p>❌ 写入失败：用户名无效或密码少于 8 位。</p></div>
             <?php endif; ?>
-        </div>
+        </details>
 
-        <div style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">
-                        <h4 style="margin-top:0;">🚀 部署 CMS</h4>
+        <details class="cfse-adv" style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;"
                         <p class="description">
                             插件不再内嵌 Worker 源码副本 —— 部署时用的是**从 CMS 官方下载的发行包**，
                             这样插件里的代码永远不会和官方版本漂移。
@@ -536,12 +537,48 @@ class CFSE_Sync_Admin_UI {
         .version { font-size: 14px; color: #666; font-weight: normal; }
         @media (max-width: 1200px) { .cfse-grid { grid-template-columns: 1fr; } }
         </style>
+        <script>
+        // 测试连接（状态机第二屏 + 连接卡片共用）
+        (function () {
+            function bind(btnId, outId) {
+                var btn = document.getElementById(btnId);
+                var out = document.getElementById(outId);
+                if (!btn || !out) return;
+                btn.addEventListener('click', function () {
+                    out.textContent = '测试中…';
+                    out.style.color = '';
+                    // 表单里的值优先（还没保存时也能测）
+                    var ep = document.getElementById('cfse_conn_endpoint');
+                    var key = document.getElementById('cfse_conn_auth_key');
+                    jQuery.post(ajaxurl, {
+                        action: 'cfse_test_connection',
+                        _ajax_nonce: '<?php echo esc_js(wp_create_nonce('cfse_test_connection')); ?>',
+                        endpoint: ep ? ep.value : '',
+                        auth_key: key ? key.value : ''
+                    }, function (r) {
+                        if (r && r.success) {
+                            var extra = r.data && r.data.siteName ? ('（' + r.data.siteName + '）') : '';
+                            out.textContent = '✓ 连接成功' + extra;
+                            out.style.color = '#00a32a';
+                        } else {
+                            out.textContent = '✗ ' + ((r && r.data && r.data.error) ? r.data.error : '测试失败');
+                            out.style.color = '#d63638';
+                        }
+                    }).fail(function () { out.textContent = '✗ 请求失败'; out.style.color = '#d63638'; });
+                });
+            }
+            bind('cfse-test-conn', 'cfse-test-conn-result');
+            bind('cfse-test-conn-2', 'cfse-test-conn-result-2');
+        })();
+        </script>
         <?php
     }
 
 
     public function enqueue_admin_assets() {
         wp_enqueue_style('cfse-admin', CFSE_PLUGIN_URL . 'assets/admin.css', array(), CFSE_VERSION);
+        // 三屏状态机的样式（折叠块 / hero 卡片 / 连接表）
+        wp_enqueue_style('cfse-onboarding', CFSE_PLUGIN_URL . 'assets/cfse-onboarding.css', array('cfse-admin'), CFSE_VERSION);
         // 页面里的内联脚本直接用 WP 的全局 ajaxurl + 服务端生成的 nonce，不需要额外的 admin.js
         wp_enqueue_script('jquery');
     }
@@ -740,10 +777,54 @@ class CFSE_Sync_Admin_UI {
                 <span class="description" style="grid-column:1 / -1;font-size:12px;">站点地址取自上面的「站点地址（Worker 域名）」，保存时自动同步为本站的静态站点 URL。Auth Key 请填在下面的「Auth Key」里（每个站点各自独立）。</span>
             </div>
             <?php /* 缓存策略（TTL / feed 条数）已移至 CMS 后台维护：D1 settings k='cache' */ ?>
-        </div>
+        </details>
         <?php
     }
 
+
+    /**
+     * 「连接 CMS」表单（基础层，永远可见）。
+     *
+     * 只有一个 CMS 时就是两个输入框；多个 CMS 时，主目标用这两个框，
+     * 其余的到「站点列表」里加（高级层）。
+     */
+    public function render_connection_form() {
+        $p = CFSE_Sync_Onboarding::get_instance()->get_primary();
+        $targets = $this->get_hosting_targets();
+        $multi = count($targets) > 1;
+        ?>
+        <table class="form-table" style="margin-top:6px;">
+            <tr>
+                <th style="width:110px;"><label for="cfse_conn_endpoint">CMS 地址</label></th>
+                <td>
+                    <input type="url" id="cfse_conn_endpoint" name="cf_site_url"
+                        value="<?php echo esc_attr($p['endpoint']); ?>"
+                        style="width:100%;max-width:460px;" placeholder="https://你的站点.workers.dev" />
+                    <p class="description">CMS 的对外地址。部署完 wrangler 会给你一个 <code>*.workers.dev</code> 地址（也可以绑自己的域名）。</p>
+                </td>
+            </tr>
+            <tr>
+                <th><label for="cfse_conn_auth_key">同步密钥</label></th>
+                <td>
+                    <input type="password" id="cfse_conn_auth_key" name="cf_auth_key"
+                        value="<?php echo esc_attr($p['auth_key']); ?>"
+                        style="width:100%;max-width:460px;" autocomplete="off" placeholder="CMS 的同步密钥" />
+                    <p class="description">在 <b>CMS 后台 → ⚙️ 设置</b> 里能看到。用它鉴权，<b>别泄露</b>。</p>
+                </td>
+            </tr>
+        </table>
+        <div class="cfse-hero-actions" style="margin-top:4px;">
+            <button type="button" class="button" id="cfse-test-conn-2">🔌 测试连接</button>
+            <span id="cfse-test-conn-result-2" class="cfse-dim"></span>
+        </div>
+        <?php if ($multi): ?>
+            <p class="description" style="margin-top:10px;">
+                ⚠️ 检测到 <b><?php echo count($targets); ?></b> 个站点。修改只会作用于第一个（主站点）；
+                其余的在下方「站点列表」里管理。
+            </p>
+        <?php endif; ?>
+        <?php
+    }
 
     /** 设置页：托管目标表格（已有目标逐行渲染；新增行由页面内 JS 生成） */
     public function render_hosting_targets_table() {
@@ -777,6 +858,8 @@ class CFSE_Sync_Admin_UI {
                 </ul>
             </div>
         <?php } ?>
+        <details class="cfse-adv" <?php echo (isset($_GET['cfse_expand']) && $_GET['cfse_expand'] === 'targets') ? 'open' : ''; ?>>
+        <summary>🏗 站点列表（高级）—— 一个 WP 同步到多个 CMS 实例时才需要</summary>
         <div style="overflow-x:auto;">
         <table class="widefat striped" id="cfse-targets" style="max-width:100%;font-size:12.5px;line-height:1.5;">
             <thead><tr>
@@ -817,7 +900,8 @@ class CFSE_Sync_Admin_UI {
                     <div style="margin:2px 0;">⚠ <?php echo esc_html($w['message']); ?></div>
                 <?php } ?>
             </div>
-        <?php }
+        <?php } ?>
+        </details>
     }
 
 
