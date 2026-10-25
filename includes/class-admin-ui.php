@@ -106,13 +106,13 @@ class CFSE_Sync_Admin_UI {
                         $conn_ok = ($conn['endpoint'] !== '' && $conn['auth_key'] !== '');
                         ?>
                         <div class="cfse-card">
-                            <h2>📡 连接 CMS</h2>
                             <?php if ($conn_ok): ?>
-                                <details class="cfse-adv cfse-adv-flat">
-                                    <summary>✅ 已连接 <code><?php echo esc_html($conn['endpoint']); ?></code><span class="cfse-sum-extra">点开可改地址 / 密钥</span></summary>
+                                <details class="cfse-fold">
+                                    <summary>📡 连接 CMS<span class="cfse-fold-meta">✅ 已连接 <?php echo esc_html($conn['endpoint']); ?></span></summary>
                                     <?php $this->render_connection_form(); ?>
                                 </details>
                             <?php else: ?>
+                                <h2>📡 连接 CMS</h2>
                                 <?php $this->render_connection_form(); ?>
                             <?php endif; ?>
                         </div>
@@ -403,7 +403,8 @@ class CFSE_Sync_Admin_UI {
         .cfse-cron-val.on { color: #00a32a; }
         .cfse-cron-val.off { color: #a7aaad; }
 
-        .cfse-log { margin: 0; background: #f6f7f7; border-radius: 6px; padding: 14px; max-height: 280px; overflow: auto; font-size: 13px; line-height: 1.7; color: #3c434a; white-space: pre-wrap; word-break: break-word; }
+        /* 日志：深色终端块（日志是等宽对齐的，浅底反而更难扫行） */
+        .cfse-log { margin: 0; background: #1e1e1e; color: #d4d4d4; border-radius: 6px; padding: 14px 16px; max-height: 320px; overflow: auto; font-family: Consolas, Menlo, Monaco, "Courier New", monospace; font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
 
         .cfse-savebar { display: flex; justify-content: flex-end; }
 
@@ -418,14 +419,13 @@ class CFSE_Sync_Admin_UI {
         .cfse-adv > *:not(summary):first-of-type { margin-top: 14px; }
         .cfse-adv > *:not(summary):last-child { margin-bottom: 16px; }
 
-        /* 卡片内的「已连接」折叠：去掉内层边框，只留一行 + 三角 */
-        .cfse-adv-flat { border: 0; background: transparent; }
-        .cfse-adv-flat > summary { padding: 4px 0; color: #1d2327; }
-        .cfse-adv-flat > summary:hover { background: transparent; }
-        .cfse-adv-flat[open] > summary { border-bottom: 0; margin-bottom: 10px; }
-        .cfse-adv-flat > *:not(summary) { margin-left: 0; margin-right: 0; }
-        .cfse-adv-flat > *:not(summary):last-child { margin-bottom: 0; }
-        .cfse-sum-extra { margin-left: 10px; font-weight: 400; color: #787c82; font-size: 13px; }
+        /* 卡片内的「已连接」折叠：折叠头本身就是卡片标题，右侧挂状态 */
+        .cfse-fold > summary { display: flex; align-items: center; gap: 8px; margin: 0; padding: 0 0 12px; font-size: 16px; font-weight: 600; color: #1d2327; border-bottom: 1px solid #f0f0f1; list-style: none; cursor: pointer; user-select: none; }
+        .cfse-fold > summary::-webkit-details-marker { display: none; }
+        .cfse-fold > summary::before { content: '▸'; font-weight: 400; color: #787c82; transition: transform .15s; }
+        .cfse-fold[open] > summary::before { transform: rotate(90deg); }
+        .cfse-fold[open] > summary { margin-bottom: 14px; }
+        .cfse-fold-meta { margin-left: auto; font-size: 13px; font-weight: 400; color: #00a32a; text-align: right; overflow-wrap: anywhere; }
 
         .version { font-size: 14px; color: #646970; font-weight: normal; }
 

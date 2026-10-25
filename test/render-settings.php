@@ -65,9 +65,9 @@ try {
 
     // 关键结构断言
     $checks = array(
-        '状态机横幅'      => 'cfse-hero',
         '连接 CMS 卡片'   => '连接 CMS',
         '折叠块 details'  => '<details class="cfse-adv"',
+        '已连接折叠头'    => 'cfse-fold-meta',
         '同步内容区块'    => '同步设置',
         '测试连接按钮'    => 'cfse-test-conn',
         '发行包下载按钮'  => 'cf_download_release',
@@ -78,9 +78,15 @@ try {
         echo sprintf("    %-18s %s\n", $label, strpos($html, $needle) !== false ? '存在' : '缺失');
     }
 
-    // 状态机三屏的文案
+    // 页面级横幅只在「没配 / 配了没验证」时渲染；已连接时与「连接 CMS」折叠头重复，按设计不出
+    $has_hero = strpos($html, 'cfse-hero') !== false;
+    echo sprintf("    %-18s %s\n", '状态机横幅', $state === 'connected'
+        ? ($has_hero ? '异常：已连接时不该出现' : '按设计不渲染')
+        : ($has_hero ? '存在' : '缺失'));
+
+    // 状态机三屏的文案（仅未连接状态才有意义）
     echo "\n【状态机文案】\n";
-    foreach (array('连接你的自托管 CMS', '还差一步', '已连接') as $needle) {
+    foreach (array('连接你的自托管 CMS', '还差一步') as $needle) {
         echo sprintf("    %-24s %s\n", $needle, strpos($html, $needle) !== false ? '出现' : '未出现');
     }
 

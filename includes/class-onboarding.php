@@ -214,28 +214,17 @@ class CFSE_Sync_Onboarding {
     // ============================================
 
     /**
-     * 「已连上」这一屏 —— 直接是同步操作。
-     */
-    public function render_screen_connected() {
-        $p = $this->get_primary();
-        ?>
-        <div class="cfse-card cfse-hero cfse-hero-ok">
-            <h2>✅ 已连接<?php echo $p['name'] !== '' ? ' · ' . esc_html($p['name']) : ''; ?></h2>
-            <p class="cfse-hero-line">CMS 在 <code><?php echo esc_html($p['endpoint']); ?></code></p>
-        </div>
-        <?php
-    }
-
-    /**
      * 按当前状态渲染对应的那一屏。
+     *
+     * 「已连接」不渲染任何东西 —— 那一屏原本只有一句「✅ 已连接 · 站点名 / CMS 在 xxx」，
+     * 与下面「📡 连接 CMS」卡片完全重复（卡片折叠时那行摘要本身就是状态）。
+     * 只有「还没配」和「配了但没验证」这两种状态需要页面级提示。
      */
     public function render_current_screen() {
         $st = $this->get_state();
-        if ($st === 'connected') {
-            $this->render_screen_connected();
-        } elseif ($st === 'configured') {
+        if ($st === 'configured') {
             $this->render_screen_configured();
-        } else {
+        } elseif ($st !== 'connected') {
             $this->render_screen_none();
         }
     }
