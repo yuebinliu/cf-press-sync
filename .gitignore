@@ -1,0 +1,22 @@
+# 本机配置（含账号级 ID / API Token，不入库）
+worker/wrangler.toml
+worker/.dev.vars
+
+# 依赖与构建缓存
+node_modules/
+.wrangler/
+dist/
+
+# 下载的 CMS 发行包（运行时从 GitHub Releases / 官网拉取，不入库）
+cms-package/
+*.zip
+
+# AI 工具的本地记忆目录
+.workbuddy/
+.workbuddy-ai/
+
+# 系统与编辑器噪声
+.DS_Store
+Thumbs.db
+*.swp
+*~

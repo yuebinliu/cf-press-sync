@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>管理后台 - CFSE</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background: #f4f5f7; color: #222; }
+  a { color: #2271d1; text-decoration: none; }
+  header { background: #1d2327; color: #fff; padding: 0 18px; min-height: 50px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  header .brand { font-weight: 700; }
+  header nav { display: flex; flex-wrap: wrap; align-items: center; }
+  header nav a { color: #c7c9cc; margin-right: 14px; padding: 4px 2px; }
+  header nav a.active { color: #fff; border-bottom: 2px solid #2271d1; }
+  @media (max-width: 720px) {
+    header { padding: 8px 12px; }
+    header nav a { margin-right: 12px; font-size: 14px; }
+    #who { display: none; }
+    main { margin: 12px auto; }
+  }
+  body.ed-full main { max-width: none; margin: 0; padding: 0; }
+  body.ed-full #view-posts { position: fixed; inset: 0; z-index: 40; background: #fff; overflow: auto; padding: 14px 16px; }
+  body.ed-full #ed-wysiwyg #ed-body { min-height: calc(100vh - 300px); }
+  body.ed-full #ed-md textarea, body.ed-full #ed-md #ed-md-prev { min-height: calc(100vh - 300px); }
+  header .spacer { flex: 1; }
+  main { max-width: 980px; margin: 22px auto; padding: 0 14px; }
+  .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.08); padding: 18px; margin-bottom: 18px; }
+  h1 { font-size: 20px; margin: 0 0 14px; }
+  .btn { display: inline-block; border: 1px solid #ccc; background: #f6f7f7; color: #222; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  .btn:hover { background: #f0f0f1; }
+  .btn-primary { background: #2271d1; border-color: #2271d1; color: #fff; }
+  .btn-primary:hover { background: #135e96; }
+  .btn-danger { color: #b32d2e; border-color: #b32d2e; background: #fff; }
+  .btn-sm { padding: 3px 10px; font-size: 12px; }
+  input[type=text], input[type=password], input[type=email], input[type=url], textarea, select {
+    width: 100%; padding: 8px 10px; border: 1px solid #c3c4c7; border-radius: 4px; font-size: 14px; font-family: inherit;
+  }
+  textarea { min-height: 260px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.6; }
+  label { display: block; margin: 12px 0 4px; font-weight: 600; font-size: 13px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 220px; }
+  .grid table { width: 100%; border-collapse: collapse; }
+  .grid th, .grid td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; font-size: 14px; vertical-align: top; }
+  .grid th { font-size: 12px; color: #757575; text-transform: uppercase; }
+  .grid tr:hover td { background: #f9fafb; }
+  .muted { color: #888; font-size: 12px; }
+  .pager { margin-top: 12px; display: flex; gap: 8px; align-items: center; }
+  .flash { padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; font-size: 13px; }
+  .flash.ok { background: #edfaef; color: #22710a; border: 1px solid #b8e6bf; }
+  .flash.err { background: #fcf0f1; color: #b32d2e; border: 1px solid #f2c9cc; }
+  .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+  .toolbar input[type=text] { flex: 1 1 140px; width: auto; max-width: 260px; }
+  .toolbar select { flex: 0 0 auto; width: auto; max-width: 160px; }
+  #login-card { max-width: 380px; margin: 80px auto; }
+  #view { display: none; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header id="topbar" class="hidden">
+  <span class="brand" id="site-name">☁️ CFSE 管理后台</span>
+  <nav>
+    <a href="#posts" data-nav="posts" class="active">文章</a>
+    <a href="#taxonomies" data-nav="tax">分类 / 标签</a>
+    <a href="#media" data-nav="media">媒体</a>
+    <a href="#users" data-nav="users">用户</a>
+    <a href="#templates" data-nav="tpl">模板</a>
+    <a href="#documents" data-nav="documents">📚 文档库</a>
+    <a href="#settings" data-nav="settings">设置</a>
+<a href="#comments" data-nav="comments">💬 评论</a>
+  </nav>
+  <span class="spacer"></span>
+  <a href="/" target="_blank" class="btn btn-sm" style="color:#c7c9cc;">查看站点 ↗</a>
+  <span id="who" style="color:#c7c9cc;font-size:13px;"></span>
+  <button class="btn btn-sm" id="btn-logout">退出</button>
+</header>
+
+<main>
+  <div id="login-card" class="card">
+    <h1>登录</h1>
+    <div id="flash-login"></div>
+    <form id="login-form">
+      <label>用户名</label>
+      <input type="text" id="login-user" autocomplete="username" required>
+      <label>密码</label>
+      <input type="password" id="login-pass" autocomplete="current-password" required>
+      <div style="margin-top:16px;">
+        <button type="submit" class="btn btn-primary">登 录</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="view">
+    <div id="flash-main"></div>
+    <section id="view-posts"></section>
+    <section id="view-tax" class="hidden"></section>
+    <section id="view-media" class="hidden"></section>
+    <section id="view-users" class="hidden"></section>
+    <section id="view-tpl" class="hidden"></section>
+    <section id="view-documents" class="hidden"></section>
+    <section id="view-settings" class="hidden"></section>
+<section id="view-comments" class="hidden"></section>
+  </div>
+</main>
+
+<script src="/admin/vendor/marked.min.js"></script>
+<script src="/admin/app.js"></script>
+</body>
+</html>

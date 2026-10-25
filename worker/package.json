@@ -1,0 +1,19 @@
+{
+  "name": "cfse-site",
+  "version": "1.0.0",
+  "description": "CFSE 自托管 CMS 运行时（Worker + R2 + D1）",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "node scripts/sync-themes-index.mjs && wrangler deploy",
+    "logs": "wrangler tail",
+    "themes-index": "node scripts/sync-themes-index.mjs",
+    "setup": "node scripts/setup.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  },
+  "dependencies": {
+    "marked": "^18.0.13"
+  }
+}
