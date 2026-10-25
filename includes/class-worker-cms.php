@@ -434,13 +434,8 @@ class CFSE_Sync_Worker_CMS {
 
     public function upload_to_r2_via_worker($path, $content, $content_type = 'text/html', $content_encoding = null, $only_ids = null) {
         try {
-            if ($this->config['debug_mode']) {
-                $debug_path = CFSE_DEBUG_DIR . '/' . $path;
-                $debug_dir = dirname($debug_path);
-                if (!is_dir($debug_dir)) @mkdir($debug_dir, 0755, true);
-                @file_put_contents($debug_path, $content);
-                $this->log("调试文件已保存: {$debug_path} (" . strlen($content) . " 字节)", 'DEBUG');
-            }
+            // 2026-10-26 移除「调试模式」落盘：CMS 走懒生成（单页现场渲染，不落 HTML 文件），
+            // 这条路径现在只剩媒体上传会走，dump 出来的是图片而不是 HTML，留着只会误导。
             // 多托管：对所有「具备静态文件能力」的目标上传
             $res = $this->for_each_target('r2', function ($t) use ($path, $content, $content_type, $content_encoding) {
                 return $this->target_upload($t, $path, $content, $content_type, $content_encoding);

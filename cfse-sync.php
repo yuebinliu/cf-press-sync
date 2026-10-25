@@ -55,7 +55,6 @@ if (!defined('CFSE_VERSION')) define('CFSE_VERSION', '1.0.0');
 if (!defined('CFSE_PLUGIN_DIR')) define('CFSE_PLUGIN_DIR', plugin_dir_path(__FILE__));
 if (!defined('CFSE_PLUGIN_URL')) define('CFSE_PLUGIN_URL', plugin_dir_url(__FILE__));
 if (!defined('CFSE_LOG_FILE')) define('CFSE_LOG_FILE', WP_CONTENT_DIR . '/cf-static-export.log');
-if (!defined('CFSE_DEBUG_DIR')) define('CFSE_DEBUG_DIR', WP_CONTENT_DIR . '/cf-debug');
 // 历史遗留：本插件不再生成静态文件，常量仅为兼容旧代码路径（本地目录 target / 清理残留）而保留
 if (!defined('CFSE_LOCAL_DIR')) define('CFSE_LOCAL_DIR', WP_CONTENT_DIR . '/cfse-static');
 // 「Worker 端诞生」的 wp_id 判据（见 ROADMAP I.1）：WP 侧自增 ID 远小于它，
@@ -136,7 +135,7 @@ class CFSE_Sync_Plugin {
     private static $deleted_post_ids = array();
     // 默认值：内部抓取请求会在 load_config() 之前早退，而 log() 会读这两个键，
     // 先给上默认值可避免 PHP8 的 undefined array key warning（行为仍是"不写日志"）。
-    private $config = array('enable_logging' => false, 'debug_mode' => false);
+    private $config = array('enable_logging' => false);
 
 
     public static function get_instance() {
@@ -243,7 +242,7 @@ class CFSE_Sync_Plugin {
             'batch_size' => max(1, (int) get_option('cf_batch_size', 50)),
             'max_retries' => max(1, (int) get_option('cf_max_retries', 3)),
             'enable_logging' => (bool) get_option('cf_enable_logging', true),
-            'debug_mode' => (bool) get_option('cf_debug_mode', false),
+            // debug_mode 已移除（2026-10-26）：CMS 懒生成、不落 HTML，调试落盘已无意义。
             // 缓存策略（TTL / feed 条数 / 发布后清缓存）已全部归 CMS 后台维护
             // （D1 settings k='cache' 行）；WP 侧不再读写这些 option，也不再清 KV 缓存。
             'auth_key' => $primary_key,

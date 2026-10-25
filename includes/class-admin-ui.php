@@ -100,96 +100,87 @@ class CFSE_Sync_Admin_UI {
                 <div class="cfse-grid">
                     <div class="cfse-col cfse-col-main">
 
-                        <!-- ① 连接 -->
+                        <!-- ① 连接 CMS -->
                         <div class="cfse-card">
                             <h2>📡 连接 CMS</h2>
                             <?php $this->render_connection_form(); ?>
                         </div>
 
-                        <!-- ② 内容同步 -->
+                        <!-- ② 同步设置 -->
                         <div class="cfse-card">
-                            <h2>🔄 内容同步</h2>
-
-                            <div class="cfse-sec">
-                                <h4>手动</h4>
-                                <div class="cfse-actions">
-                                    <button type="submit" form="cfse-act-bulk" class="button button-primary" onclick="return confirm('把全部已发布文章同步到 D1（单页由 Worker 渲染），确认继续？')">📤 全量同步到 D1</button>
-                                    <button type="submit" form="cfse-pull-form" class="button" onclick="return confirm('从 Worker 拉取「Worker 端诞生」的文章到 WordPress，确认继续？')">☁️ 从 Worker 拉取</button>
-                                    <button type="submit" form="cfse-act-clear" class="button" onclick="return confirm('重置同步标记？只清 WP 侧记账，不碰 D1 / R2 / 缓存。')">♻️ 重置同步标记</button>
-                                </div>
-                                <label class="cfse-check"><input type="checkbox" name="cfse_pull_overwrite" value="1" form="cfse-pull-form" /> 拉取时覆盖已存在的文章（以 Worker 版本为准）</label>
-                            </div>
+                            <h2>🔄 同步设置</h2>
+                            <?php settings_fields('cf_static_export_pro'); ?>
 
                             <div class="cfse-sec">
                                 <h4>自动</h4>
-                                <label class="cfse-check"><input type="checkbox" form="cfse-options" name="cf_sync_d1" value="1" <?php checked(!empty($this->config['sync_d1'])); ?> /> 发布文章时同步到 D1</label>
-                                <label class="cfse-check"><input type="checkbox" form="cfse-options" name="cf_worker_auto_check" value="1" <?php checked(!empty($this->config['worker_auto_check'])); ?> /> 编辑页自动比对 Worker 版本</label>
-                                <label class="cfse-check"><input type="checkbox" form="cfse-options" name="cf_comments_pull_cron" value="1" <?php checked(!empty($this->config['comments_pull_cron'])); ?> /> 每小时从 Worker 拉取评论</label>
-                                <label class="cfse-check"><input type="checkbox" form="cfse-options" name="cf_comments_sync" value="1" <?php checked(!empty($this->config['comments_sync'])); ?> /> WP 评论同步到 D1</label>
+                                <label class="cfse-check"><input type="checkbox" form="cfse-options" name="cf_sync_d1" value="1" <?php checked(!empty($this->config['sync_d1'])); ?> /> 发布文章时同步到 CMS</label>
+                                <label class="cfse-check"><input type="checkbox" form="cfse-options" name="cf_worker_auto_check" value="1" <?php checked(!empty($this->config['worker_auto_check'])); ?> /> 编辑页自动比对 CMS 版本</label>
+                                <label class="cfse-check"><input type="checkbox" form="cfse-options" name="cf_comments_sync" value="1" <?php checked(!empty($this->config['comments_sync'])); ?> /> WP 评论同步到 CMS</label>
+                                <label class="cfse-check"><input type="checkbox" form="cfse-options" name="cf_comments_pull_cron" value="1" <?php checked(!empty($this->config['comments_pull_cron'])); ?> /> 每小时从 CMS 拉取评论</label>
                             </div>
 
                             <div class="cfse-sec">
-                                <h4>评论</h4>
-                                <div class="cfse-actions">
-                                    <a class="button" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=cfse_sync_comments'), 'cfse_sync_comments')); ?>">⬆️ 同步评论到 D1</a>
-                                    <a class="button" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=cfse_pull_comments'), 'cfse_pull_comments')); ?>">⬇️ 从 Worker 拉取评论</a>
+                                <h4>同步参数</h4>
+                                <div class="cfse-inline">
+                                    <label>定时每批 <input type="number" id="cf_batch_size" name="cf_batch_size" value="<?php echo esc_attr($this->config['batch_size']); ?>" class="small-text" min="1" /> 篇</label>
+                                    <label>失败重试 <input type="number" id="cf_max_retries" name="cf_max_retries" value="<?php echo esc_attr($this->config['max_retries']); ?>" class="small-text" min="1" /> 次</label>
+                                    <label class="cfse-check"><input type="checkbox" name="cf_enable_logging" value="1" <?php checked($this->config['enable_logging']); ?> /> 记录日志</label>
                                 </div>
+                                <p class="description">「定时每批」只影响每日定时任务，手动同步不受此限。</p>
                             </div>
-                        </div>
 
-                        <!-- ③ 站点信息 -->
-                        <div class="cfse-card">
-                            <h2>🔁 站点信息</h2>
-                            <p class="cfse-hint">只写 4 项：<b>站点名 / 描述 / 时区 / 默认作者</b>。菜单、布局、logo、横幅、社交、评论、URL 结构都不会动。</p>
-                            <div class="cfse-actions">
-                                <button type="submit" form="cfse-act-siteinfo" class="button">🔄 同步站点设置到 D1</button>
-                            </div>
-                            <?php if (isset($_GET['site_info_synced'])): ?>
-                                <?php if ($_GET['site_info_synced'] === '1'): ?>
-                                    <div class="notice notice-success is-dismissible" style="margin:10px 0 0;"><p>✅ 已合并写入 D1（菜单 / 布局 / URL 结构未改动）。</p></div>
-                                <?php else: ?>
-                                    <div class="notice notice-error is-dismissible" style="margin:10px 0 0;"><p>❌ 同步失败：没有可用的「D1 数据」目标，或请求被拒（详见日志）。</p></div>
+                            <div class="cfse-sec">
+                                <h4>手动操作</h4>
+                                <div class="cfse-ops">
+                                    <div class="cfse-op">
+                                        <span class="cfse-op-label">文章</span>
+                                        <button type="submit" form="cfse-act-bulk" class="button button-primary" onclick="return confirm('把全部已发布文章同步到 CMS？确认继续。')">同步文章到 CMS</button>
+                                        <button type="submit" form="cfse-pull-form" class="button" onclick="return confirm('从 CMS 拉取「CMS 端诞生」的文章到 WordPress？确认继续。')">拉取文章</button>
+                                        <label class="cfse-check cfse-op-note"><input type="checkbox" name="cfse_pull_overwrite" value="1" form="cfse-pull-form" /> 拉取时覆盖已有文章</label>
+                                    </div>
+                                    <div class="cfse-op">
+                                        <span class="cfse-op-label">评论</span>
+                                        <a class="button" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=cfse_sync_comments'), 'cfse_sync_comments')); ?>">同步评论到 CMS</a>
+                                        <a class="button" href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=cfse_pull_comments'), 'cfse_pull_comments')); ?>">拉取评论</a>
+                                    </div>
+                                    <div class="cfse-op">
+                                        <span class="cfse-op-label">站点</span>
+                                        <button type="submit" form="cfse-act-siteinfo" class="button">同步站点信息到 CMS</button>
+                                    </div>
+                                    <div class="cfse-op">
+                                        <span class="cfse-op-label">其它</span>
+                                        <button type="submit" form="cfse-act-clear" class="button" onclick="return confirm('重置同步标记？只清 WP 侧记账，不碰 CMS 数据与缓存。')">重置同步标记</button>
+                                    </div>
+                                </div>
+                                <p class="description">「同步站点信息」只写 4 项：<b>站点名 / 描述 / 时区 / 默认作者</b>。菜单、布局、logo、横幅、社交、评论、URL 结构都不会动。</p>
+                                <?php if (isset($_GET['site_info_synced'])): ?>
+                                    <?php if ($_GET['site_info_synced'] === '1'): ?>
+                                        <div class="notice notice-success is-dismissible" style="margin:10px 0 0;"><p>✅ 已合并写入（菜单 / 布局 / URL 结构未改动）。</p></div>
+                                    <?php else: ?>
+                                        <div class="notice notice-error is-dismissible" style="margin:10px 0 0;"><p>❌ 同步失败：没有可用的「D1 数据」目标，或请求被拒（详见日志）。</p></div>
+                                    <?php endif; ?>
                                 <?php endif; ?>
-                            <?php endif; ?>
+                            </div>
                         </div>
 
-                        <!-- ④ 基础参数 -->
+                        <!-- ③ 高级设置 -->
                         <div class="cfse-card">
-                            <h2>⚙️ 基础参数</h2>
-                            <?php settings_fields('cf_static_export_pro'); ?>
-                            <table class="form-table cfse-table">
-                                <tr><th><label for="cf_batch_size">定时同步每批篇数</label></th>
-                                    <td><input type="number" id="cf_batch_size" name="cf_batch_size" value="<?php echo esc_attr($this->config['batch_size']); ?>" class="small-text" min="1" />
-                                        <p class="description">只影响每日定时任务；「全量同步」按钮不受此限。</p></td></tr>
-                                <tr><th><label for="cf_max_retries">写入重试次数</label></th>
-                                    <td><input type="number" id="cf_max_retries" name="cf_max_retries" value="<?php echo esc_attr($this->config['max_retries']); ?>" class="small-text" min="1" />
-                                        <p class="description">D1 写入失败时的重试次数。</p></td></tr>
-                                <tr><th>日志</th>
-                                    <td>
-                                        <label class="cfse-check"><input type="checkbox" name="cf_enable_logging" value="1" <?php checked($this->config['enable_logging']); ?> /> 启用（关掉后右侧「最近日志」不再更新）</label>
-                                        <label class="cfse-check"><input type="checkbox" name="cf_debug_mode" value="1" <?php checked($this->config['debug_mode']); ?> /> 调试模式（把上传的 HTML 另存到本地，排查模板问题用）</label>
-                                    </td></tr>
-                            </table>
-                        </div>
-
-                        <!-- ⑤ 高级 -->
-                        <div class="cfse-card">
-                            <h2>🔧 高级</h2>
+                            <h2>🔧 高级设置</h2>
 
                             <details class="cfse-adv">
-                                <summary>👤 Worker 后台账号 —— 忘了密码时用它重置</summary>
-                                <p class="description">写入 D1 <code>users</code> 表，密码不落 WordPress。</p>
+                                <summary>🔑 密码重置（CMS 后台账号）</summary>
+                                <p class="description">写入 CMS 的 D1 <code>users</code> 表，密码不落 WordPress。忘了后台密码时用它重置。</p>
                                 <?php $seed_admin = get_users(array('role' => 'administrator', 'number' => 1)); $seed_u = !empty($seed_admin) ? $seed_admin[0] : null; ?>
                                 <div class="cfse-fields">
                                     <label>用户名 <input type="text" form="cfse-act-seed" name="cf_admin_username" value="<?php echo esc_attr($seed_u ? $seed_u->user_login : 'admin'); ?>" /></label>
-                                    <label>初始密码 <input type="password" form="cfse-act-seed" name="cf_admin_password" autocomplete="new-password" required /></label>
+                                    <label>新密码 <input type="password" form="cfse-act-seed" name="cf_admin_password" autocomplete="new-password" required /></label>
                                     <label>邮箱 <input type="email" form="cfse-act-seed" name="cf_admin_email" value="<?php echo esc_attr($seed_u ? $seed_u->user_email : ''); ?>" /></label>
                                 </div>
                                 <div class="cfse-actions">
-                                    <button type="submit" form="cfse-act-seed" class="button">👤 写入 Worker 后台用户</button>
+                                    <button type="submit" form="cfse-act-seed" class="button">写入 / 重置密码</button>
                                 </div>
                                 <?php if (isset($_GET['seeded']) && $_GET['seeded'] === '1'): ?>
-                                    <div class="notice notice-success is-dismissible" style="margin:8px 0 0;"><p>✅ 已写入 D1。</p></div>
+                                    <div class="notice notice-success is-dismissible" style="margin:8px 0 0;"><p>✅ 已写入。</p></div>
                                 <?php elseif (isset($_GET['seeded']) && $_GET['seeded'] === '0'): ?>
                                     <div class="notice notice-error is-dismissible" style="margin:8px 0 0;"><p>❌ 失败：用户名无效或密码少于 8 位。</p></div>
                                 <?php endif; ?>
@@ -235,7 +226,7 @@ class CFSE_Sync_Admin_UI {
                         </div>
 
                         <div class="cfse-savebar">
-                            <button type="submit" class="button button-primary button-hero">保存配置</button>
+                            <button type="submit" class="button button-primary button-hero">保存设置</button>
                         </div>
                     </div><!-- /.cfse-col-main -->
 
@@ -308,8 +299,6 @@ class CFSE_Sync_Admin_UI {
         .cfse-card > h2 { margin: 0 0 12px; padding-bottom: 10px; border-bottom: 1px solid #f0f0f1; font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
         .cfse-side .cfse-card > h2 { font-size: 14px; }
 
-        .cfse-hint { margin: 0 0 12px; font-size: 13px; color: #646970; line-height: 1.6; }
-
         /* 卡片内的分组 */
         .cfse-sec + .cfse-sec { margin-top: 14px; padding-top: 14px; border-top: 1px dashed #f0f0f1; }
         .cfse-sec > h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #787c82; text-transform: none; letter-spacing: .02em; }
@@ -324,6 +313,17 @@ class CFSE_Sync_Admin_UI {
         .cfse-actions .button { margin: 0; }
         .cfse-fields { display: flex; flex-wrap: wrap; gap: 10px 14px; margin: 10px 0; font-size: 13px; }
         .cfse-fields label { display: flex; align-items: center; gap: 6px; margin: 0; }
+
+        /* 同步参数：一行内联，别做成表格 */
+        .cfse-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; font-size: 13px; }
+        .cfse-inline > label { display: flex; align-items: center; gap: 6px; margin: 0; }
+
+        /* 手动操作：每行 = 分类标签 + 按钮组 */
+        .cfse-ops { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 10px; }
+        .cfse-op { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .cfse-op-label { flex: 0 0 32px; font-size: 12px; color: #646970; }
+        .cfse-op .button { margin: 0; }
+        .cfse-op-note { margin: 0 0 0 2px; font-size: 12px; color: #646970; }
 
         /* 参数表：紧凑，去掉 WP 默认的大行高 */
         .cfse-table { margin: 0; }
@@ -420,7 +420,7 @@ class CFSE_Sync_Admin_UI {
             'cf_batch_size' => array('sanitize' => 'intval', 'default' => 50),
             'cf_max_retries' => array('sanitize' => 'intval', 'default' => 3),
             'cf_enable_logging' => array('sanitize' => 'boolval', 'default' => true),
-            'cf_debug_mode' => array('sanitize' => 'boolval', 'default' => false),
+            // cf_debug_mode 已移除（2026-10-26）：CMS 懒生成、不落 HTML，调试落盘无意义。
             'cf_auth_key' => array('sanitize' => 'sanitize_text_field', 'default' => ''),
             // 列表每页文章数已在 2026-10-26 移除：该 option 只被设置页自己的输入框读过，
             // 前台列表分页由 CMS 后台（D1 settings k='cache'.per_page）控制，WP 侧这个值不产生任何效果。
