@@ -201,7 +201,15 @@ class CFSE_Sync_Worker_CMS {
         }
         // D1 里存的是「远端 wp_id」（Worker 端诞生的篇在 WP 侧是自增 ID，映射记在 meta）
         $d1_wp_id = $this->get_remote_wp_id($post_id);
-        if (!$d1_wp_id) $d1_wp_id = $post_id;
+        if (!$d1_wp_id) {
+            $d1_wp_id = $post_id;
+        } elseif ($this->count_live_siblings($d1_wp_id, $post_id) > 0) {
+            // 同一远端 wp_id 还有别的「活着的」WP 文章 ⇒ 本篇是重复副本。
+            // 副本沉回收站/被永久删除都不该把线上数据带走 —— 否则清空一次回收站，
+            // 保留的那篇就会从 D1 里消失（页面 404），而且不会有任何报错。
+            $this->log("文章 {$post_id} 与远端 wp_id={$d1_wp_id} 的其它文章同源（重复副本），只清本地产物、跳过 D1 删除", 'INFO');
+            return;
+        }
         self::$pending_delete_ids[] = $d1_wp_id;
         if (!self::$pending_deletes_registered) {
             self::$pending_deletes_registered = true;
@@ -209,6 +217,26 @@ class CFSE_Sync_Worker_CMS {
         }
 
         $this->log("文章 {$post_id} 已删除（本地产物已清；远端清理将在本次请求结束时批量执行）", 'INFO');
+    }
+
+    /**
+     * 还有几篇「活着的」WP 文章指向同一个远端 wp_id（排除 $except_id 自己）。
+     *
+     * 用途：重复副本保护。同一远端 wp_id 被多份 WP 副本指向时（历史拉取重复），
+     * 删掉其中任意一份都不能碰 D1 —— 数据属于仍在的那一份。
+     * 两个 meta 键都算（旧插件写 `_cfsh_…`）。
+     */
+    private function count_live_siblings($remote_wp_id, $except_id) {
+        global $wpdb;
+        return (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(DISTINCT pm.post_id) FROM {$wpdb->postmeta} pm
+               INNER JOIN {$wpdb->posts} p ON p.ID = pm.post_id
+              WHERE pm.meta_key IN ('_cfse_remote_wp_id', '_cfsh_remote_wp_id')
+                AND pm.meta_value = %s
+                AND pm.post_id <> %d
+                AND p.post_type = 'post' AND p.post_status <> 'trash'",
+            (string) $remote_wp_id, (int) $except_id
+        ));
     }
 
     /** 待清理的远端条目（请求结束时一次性批量提交，避免批量删除时逐篇等待 Worker） */
@@ -660,25 +688,35 @@ class CFSE_Sync_Worker_CMS {
      *   只认新键时，老副本查不到 ⇒ 拉取又建一份，slug 被 WP 自动加 `-2`
      *   ⇒ 站上同一个 CMS 文章出现两份（2026-10-27 排查出的 16 对重复正是这个原因）。
      *   命中旧键时顺手补写新键，之后就走快路径。
+     *
+     * ⚠️ 必须排除回收站里的篇：
+     *   重复副本沉进回收站后，meta 仍指向同一个远端 wp_id。若这里把 trash 当成
+     *   「本地已有」，`拉取（覆盖）」会把内容写进回收站里那份，活着的正文永远不更新；
+     *   反过来按 ID 顺序取也可能挑到 trash ⇒ 每次拉取都白跑一遍。同理 `delete_post()`
+     *   靠它判断「是否还有同源活文章」，也必须只认非 trash。
      */
     public function find_post_by_remote_id($remote_wp_id) {
         global $wpdb;
         $id = (int) $remote_wp_id;
         if ($id <= 0) return 0;
-        $found = $wpdb->get_var($wpdb->prepare(
-            "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_cfse_remote_wp_id' AND meta_value = %d LIMIT 1",
-            $id
-        ));
-        if ($found) return (int) $found;
-
-        $found = $wpdb->get_var($wpdb->prepare(
-            "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_cfsh_remote_wp_id' AND meta_value = %d LIMIT 1",
-            $id
-        ));
-        if ($found) {
-            update_post_meta((int) $found, '_cfse_remote_wp_id', $id);
-            $this->log("按旧键 _cfsh_remote_wp_id 命中本地 #{$found}（远端 wp_id={$id}），已补写新键", 'DEBUG');
-            return (int) $found;
+        foreach (array('_cfse_remote_wp_id', '_cfsh_remote_wp_id') as $meta_key) {
+            $found = $wpdb->get_var($wpdb->prepare(
+                "SELECT pm.post_id FROM {$wpdb->postmeta} pm
+                   INNER JOIN {$wpdb->posts} p ON p.ID = pm.post_id
+                  WHERE pm.meta_key = %s AND pm.meta_value = %d
+                    AND p.post_type = 'post' AND p.post_status <> 'trash'
+                  ORDER BY (p.post_status = 'publish') DESC, p.ID ASC
+                  LIMIT 1",
+                $meta_key, $id
+            ));
+            if ($found) {
+                if ($meta_key === '_cfsh_remote_wp_id'
+                    && (int) get_post_meta((int) $found, '_cfse_remote_wp_id', true) !== $id) {
+                    update_post_meta((int) $found, '_cfse_remote_wp_id', $id);
+                    $this->log("按旧键 _cfsh_remote_wp_id 命中本地 #{$found}（远端 wp_id={$id}），已补写新键", 'DEBUG');
+                }
+                return (int) $found;
+            }
         }
         return 0;
     }
