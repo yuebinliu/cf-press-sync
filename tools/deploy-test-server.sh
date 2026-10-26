@@ -57,6 +57,19 @@ plink -ssh -pw vr50we root@$HOST \
   "docker exec $CONTAINER php $CONTAINER_DIR/test/verify-onboarding.php 2>&1" \
   2>/dev/null | grep -vE "opcache|Warning: PHP Startup" | tail -3
 
+# 重复副本门禁（2026-10-27）：同一远端 wp_id 被多篇 WP 文章指向时，
+#   ① 拉取（覆盖）不能挑中回收站那份
+#   ② 清空回收站不能把保留篇的 D1 行一起删掉
+# 库里没有重复副本时脚本自报 SKIP、退出码 0，不阻断部署。
+echo "=== ⑥b 重复副本保护 ==="
+dup_out=$(plink -ssh -pw vr50we root@$HOST \
+  "docker exec $CONTAINER php $CONTAINER_DIR/test/verify-dup-safety.php 2>&1" 2>/dev/null \
+  | grep -vE "opcache|Warning: PHP Startup" || true)
+printf "%s\n" "$dup_out" | tail -4
+case "$dup_out" in
+  *"✗"*) echo "  ✗ 重复副本保护断言失败"; exit 1 ;;
+esac
+
 echo "=== ⑦ 真实登录态渲染 ==="
 plink -ssh -pw vr50we root@$HOST \
   "docker exec $CONTAINER php $CONTAINER_DIR/test/render-settings.php 2>&1" \
