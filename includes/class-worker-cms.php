@@ -376,47 +376,91 @@ class CFSE_Sync_Worker_CMS {
 
 
     /**
-     * 迁移 D1 schema 到最新版本（当前 2）。
-     * 建表均 IF NOT EXISTS 幂等；$rebuild_links 为 true 时先重建关联表
-     * （旧 v1 → v2：分类/标签关联数据随之清空，提示全量导出）。
+     * 迁移 D1 schema 到最新版本（当前 7）。
+     * 建表均 IF NOT EXISTS 幂等；迁移前会探测 posts / taxonomies 的实际列，
+     * 缺 lang / translation_key / content_format 时幂等 ALTER 补齐。
+     * $rebuild_links 为 true 时先重建关联表（旧 v1 → v2：分类/标签关联数据随之清空，提示全量导出）。
      * 迁移完成在 _cfse_meta 记录 schema_version，之后每进程仅一次 meta 读。
+     *
+     * v7（2026-10-26）：建表语句与 cf-cms 对齐 —— posts/taxonomies 补 lang、translation_key、
+     *   去掉 4 个从不被查询计划选中的冗余索引、去掉已下线的 styles 表。
+     *   目的不是「升级老站」，而是**别再让新站由插件先建出缺列的库**：CMS 侧
+     *   ensureCoreSchema() 也全是 CREATE TABLE IF NOT EXISTS，两边都没有补列逻辑，
+     *   插件先建表就永久缺 lang ⇒ CMS 任何带 lang 的读写都 500。
      */
     public function migrate_d1_schema($rebuild_links = false) {
-        // v5：探测 posts 是否已有 content_format 列（缺则幂等 ALTER 补齐）
+        // 探测 posts / taxonomies 的实际列，缺则幂等 ALTER 补齐。
+        //
+        // 为什么不能只靠下面的 CREATE TABLE IF NOT EXISTS：
+        //   表已存在时那条会被**整条跳过**，而 CMS 侧的 ensureCoreSchema() 也全是
+        //   CREATE TABLE IF NOT EXISTS —— 两边都没有补列逻辑。于是「插件先建库、
+        //   CMS 后接手」的老站会永远缺 lang / translation_key，之后任何带 lang 的
+        //   读写都报 `no such column: lang`，首页直接 500。宁可每次迁移探测一次。
         $probe = $this->d1_batch(array(array(
-            'sql' => "SELECT sql FROM sqlite_master WHERE type='table' AND name='posts'",
+            'sql' => "SELECT name, sql FROM sqlite_master WHERE type='table' AND name IN ('posts','taxonomies')",
             'params' => array(),
         )));
-        $has_format = false;
-        if (is_array($probe) && isset($probe[0]) && is_array($probe[0]) && isset($probe[0][0]['sql'])) {
-            if (strpos((string) $probe[0][0]['sql'], 'content_format') !== false) $has_format = true;
+        $schema_map = array();
+        if (is_array($probe) && isset($probe[0]) && is_array($probe[0])) {
+            foreach ($probe[0] as $row) {
+                if (isset($row['name'])) {
+                    $schema_map[(string) $row['name']] = (string) (isset($row['sql']) ? $row['sql'] : '');
+                }
+            }
         }
+        $posts_sql = isset($schema_map['posts']) ? $schema_map['posts'] : '';
+        $tax_sql = isset($schema_map['taxonomies']) ? $schema_map['taxonomies'] : '';
+        // 表不存在（全新库）→ 不 ALTER，交给下面的 CREATE 建出完整结构
+        $col_missing = function ($sql, $col) {
+            return $sql !== '' && !preg_match('/\b' . preg_quote($col, '/') . '\b/', $sql);
+        };
+
         $statements = array();
-        if (!$has_format) {
-            // 老表（v4 及更早）补列；已有该列的新建表则跳过
+        if ($col_missing($posts_sql, 'content_format')) {
+            // 老表（v4 及更早）补列
             $statements[] = array('sql' => "ALTER TABLE posts ADD COLUMN content_format TEXT DEFAULT 'html'", 'params' => array());
+        }
+        if ($col_missing($posts_sql, 'lang')) {
+            // 2026-10-19 i18n 加的两列，老站当时是手工迁移补的
+            $statements[] = array('sql' => "ALTER TABLE posts ADD COLUMN lang TEXT NOT NULL DEFAULT 'zh'", 'params' => array());
+        }
+        if ($col_missing($posts_sql, 'translation_key')) {
+            $statements[] = array('sql' => "ALTER TABLE posts ADD COLUMN translation_key TEXT NOT NULL DEFAULT ''", 'params' => array());
+        }
+        if ($col_missing($tax_sql, 'lang')) {
+            $statements[] = array('sql' => "ALTER TABLE taxonomies ADD COLUMN lang TEXT NOT NULL DEFAULT 'zh'", 'params' => array());
         }
         if ($rebuild_links) {
             $statements[] = array('sql' => 'DROP TABLE IF EXISTS taxonomies', 'params' => array());
             $statements[] = array('sql' => 'DROP TABLE IF EXISTS post_taxonomy', 'params' => array());
         }
         $ddl = array(
-            "CREATE TABLE IF NOT EXISTS posts (wp_id INTEGER PRIMARY KEY, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL, content TEXT, content_format TEXT DEFAULT 'html', excerpt TEXT, date DATETIME NOT NULL, modified DATETIME, status TEXT DEFAULT 'published', comment_status TEXT DEFAULT 'open', categories TEXT, tags TEXT, featured_image TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
+            "CREATE TABLE IF NOT EXISTS posts (wp_id INTEGER PRIMARY KEY, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL, content TEXT, content_format TEXT DEFAULT 'html', excerpt TEXT, date DATETIME NOT NULL, modified DATETIME, status TEXT DEFAULT 'published', comment_status TEXT DEFAULT 'open', categories TEXT, tags TEXT, featured_image TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, lang TEXT NOT NULL DEFAULT 'zh', translation_key TEXT NOT NULL DEFAULT '')",
             "CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT)",
             "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, user_login TEXT UNIQUE NOT NULL, user_pass TEXT NOT NULL, user_nicename TEXT, user_email TEXT, user_url TEXT, user_registered DATETIME DEFAULT CURRENT_TIMESTAMP, display_name TEXT, role TEXT DEFAULT 'admin', avatar_url TEXT, user_status INTEGER DEFAULT 1, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, settings TEXT)",
-            "CREATE TABLE IF NOT EXISTS taxonomies (type TEXT NOT NULL, slug TEXT NOT NULL, name TEXT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (type, slug))",
+            "CREATE TABLE IF NOT EXISTS taxonomies (type TEXT NOT NULL, slug TEXT NOT NULL, name TEXT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, lang TEXT NOT NULL DEFAULT 'zh', PRIMARY KEY (type, slug))",
             "CREATE TABLE IF NOT EXISTS post_taxonomy (post_id INTEGER NOT NULL, taxonomy_type TEXT NOT NULL, taxonomy_slug TEXT NOT NULL, PRIMARY KEY (post_id, taxonomy_type, taxonomy_slug))",
+            // 索引只建「查询计划真的会选」的（与 cf-cms 的 schema.sql / ensureCoreSchema 一致）。
+            // 下面 4 个已于 2026-10-26 在线上删掉，**别再建回来** —— 索引不是免费的，
+            // 每次 INSERT/UPDATE/DELETE 都要同步维护对应 B-Tree，批量同步时是纯写放大
+            // （实测单行 UPDATE：posts 7 索引 0.41~0.56ms，5 索引 0.28ms）：
+            //   idx_posts_status      与 idx_posts_status_date 前缀重复
+            //   idx_posts_slug        与 slug TEXT UNIQUE 的自动索引重复
+            //   idx_pt_post            与 post_taxonomy 主键前缀重复
+            //   idx_comments_parent    代码只按 comment_id 查父，评论树在 JS 里组装
             "CREATE INDEX IF NOT EXISTS idx_posts_date ON posts(date DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status)",
-            "CREATE INDEX IF NOT EXISTS idx_posts_slug ON posts(slug)",
-            "CREATE INDEX IF NOT EXISTS idx_pt_post ON post_taxonomy(post_id)",
+            // 列表页「WHERE status=? ORDER BY date DESC LIMIT n」：缺它会先扫全部已发布
+            // 文章再临时排序（取 8 条读 606 行，有它只读 8 行）
+            "CREATE INDEX IF NOT EXISTS idx_posts_status_date ON posts(status, date DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_posts_lang_status_date ON posts(lang, status, date DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_posts_translation ON posts(translation_key)",
             "CREATE INDEX IF NOT EXISTS idx_pt_slug ON post_taxonomy(taxonomy_slug)",
-            "CREATE TABLE IF NOT EXISTS styles (id TEXT NOT NULL, version INTEGER NOT NULL, name TEXT, tpl_json TEXT, updated_at TEXT, PRIMARY KEY (id, version))",
+            // styles 表已随「文档库/风格库→R2」重构下线（docs/style-refactor.md）：
+            // 模板存 R2 的 tpl.json，线上这张表早已不存在，不再建。
             "CREATE TABLE IF NOT EXISTS app_passwords (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL DEFAULT '', pass_hash TEXT NOT NULL, last_used_at TEXT DEFAULT '', created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)",
             "CREATE INDEX IF NOT EXISTS idx_apppw_user ON app_passwords(user_id)",
             "CREATE TABLE IF NOT EXISTS comments (comment_id INTEGER PRIMARY KEY, wp_comment_id INTEGER DEFAULT 0, post_id INTEGER NOT NULL, parent_id INTEGER NOT NULL DEFAULT 0, author TEXT DEFAULT '', author_email TEXT DEFAULT '', author_url TEXT DEFAULT '', avatar TEXT DEFAULT '', date_text TEXT DEFAULT '', date TEXT DEFAULT '', content TEXT DEFAULT '', approved INTEGER NOT NULL DEFAULT 0, type TEXT DEFAULT 'comment', origin TEXT DEFAULT 'wp', updated_at TEXT DEFAULT '')",
             "CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id)",
-            "CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments(parent_id)",
             "INSERT INTO _cfse_meta (k, v) VALUES ('schema_version', '" . (int) self::D1_SCHEMA_VERSION . "') ON CONFLICT(k) DO UPDATE SET v = excluded.v",
         );
         foreach ($ddl as $sql) {
@@ -466,7 +510,7 @@ class CFSE_Sync_Worker_CMS {
      * 检测到旧结构时自动重建这两张表（posts 数据不动），并在日志提示做一次全量导出重建分类/标签数据。
      */
     /** 当前 D1 schema 版本（迁移链见 ensure_d1_schema / migrate_d1_schema） */
-    const D1_SCHEMA_VERSION = 6;
+    const D1_SCHEMA_VERSION = 7;
 
 
     // ============================================
