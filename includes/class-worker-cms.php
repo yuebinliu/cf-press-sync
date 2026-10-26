@@ -652,13 +652,35 @@ class CFSE_Sync_Worker_CMS {
 
 
     /** 按远端 wp_id 找 WP 侧文章 ID（0 = 未找到）—— 拉取幂等判断用 */
+    /**
+     * 按「远端 wp_id（D1 主键）」找本地 WP 文章。
+     *
+     * ⚠️ 必须同时认旧键 `_cfsh_remote_wp_id`：
+     *   旧插件（cf-static-hosting）拉取时写的是 `_cfsh_…`，新插件是 `_cfse_…`。
+     *   只认新键时，老副本查不到 ⇒ 拉取又建一份，slug 被 WP 自动加 `-2`
+     *   ⇒ 站上同一个 CMS 文章出现两份（2026-10-27 排查出的 16 对重复正是这个原因）。
+     *   命中旧键时顺手补写新键，之后就走快路径。
+     */
     public function find_post_by_remote_id($remote_wp_id) {
         global $wpdb;
+        $id = (int) $remote_wp_id;
+        if ($id <= 0) return 0;
         $found = $wpdb->get_var($wpdb->prepare(
             "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_cfse_remote_wp_id' AND meta_value = %d LIMIT 1",
-            (int) $remote_wp_id
+            $id
         ));
-        return $found ? (int) $found : 0;
+        if ($found) return (int) $found;
+
+        $found = $wpdb->get_var($wpdb->prepare(
+            "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_cfsh_remote_wp_id' AND meta_value = %d LIMIT 1",
+            $id
+        ));
+        if ($found) {
+            update_post_meta((int) $found, '_cfse_remote_wp_id', $id);
+            $this->log("按旧键 _cfsh_remote_wp_id 命中本地 #{$found}（远端 wp_id={$id}），已补写新键", 'DEBUG');
+            return (int) $found;
+        }
+        return 0;
     }
 
 
@@ -666,9 +688,14 @@ class CFSE_Sync_Worker_CMS {
      * 该篇在 Worker 端（D1）的 wp_id：有 meta `_cfse_remote_wp_id` 时返回它，否则 0（= WP 本地诞生）。
      * 为什么不拿「WP 文章 ID」当远端 ID：拉取时若用 import_id 对齐 ID，会把 wp_posts 的 AUTO_INCREMENT
      * 顶到时间戳量级，之后 WP 新建的文章 ID 也变成那样（会误判成「Worker 端诞生」，见 AGENTS.md 批L）。
+     *
+     * 兼容旧键 `_cfsh_remote_wp_id`（旧插件写的），否则老副本会被当成 WP 原生文章
+     * ⇒ 导出时拿自己的 ID 去写 D1 ⇒ 撞 `posts.slug` 的 UNIQUE。
      */
     public function get_remote_wp_id($post_id) {
         $v = (int) get_post_meta((int) $post_id, '_cfse_remote_wp_id', true);
+        if ($v > 0) return $v;
+        $v = (int) get_post_meta((int) $post_id, '_cfsh_remote_wp_id', true);
         return $v > 0 ? $v : 0;
     }
 
