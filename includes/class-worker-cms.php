@@ -265,13 +265,51 @@ class CFSE_Sync_Worker_CMS {
             if (!empty($paths)) $this->delete_from_r2($paths);
             if (!empty($ids)) {
                 $this->ensure_d1_schema();
+                /*
+                 * 清空分类的写法（2026-10-27 改）
+                 *
+                 * 原来是 `DELETE FROM taxonomies WHERE slug NOT IN (SELECT DISTINCT taxonomy_slug FROM post_taxonomy)`，
+                 * 每次删一篇文章都要扫 taxonomies 全表 + post_taxonomy 全表 DISTINCT。
+                 * 实测 rows_read = **472 行**（库才 302 篇 / 431 条关联），删 10 篇就是 4720 行。
+                 * D1 按 rows_read 计费，这种「删一篇顺手扫全库」的写法很亏。
+                 *
+                 * 改成：先在删除**之前**记下这几篇涉及哪些分类（删完就查不到了），
+                 * 删完只对这些分类做一次 NOT EXISTS 探测 —— 实测 472 → 20 行量级。
+                 * 语义更精确：只清理「本次删掉的文章曾经占用过」的分类，
+                 * 不会因为别处的脏数据误删。
+                 */
+                $in = implode(',', array_fill(0, count($ids), '?'));
+                $touched = array();
+                $probe = $this->d1_batch(array(array(
+                    'sql' => "SELECT DISTINCT taxonomy_slug FROM post_taxonomy WHERE post_id IN ({$in})",
+                    'params' => $ids,
+                )));
+                if (isset($probe[0]) && is_array($probe[0])) {
+                    foreach ($probe[0] as $row) {
+                        if (!empty($row['taxonomy_slug'])) $touched[] = (string) $row['taxonomy_slug'];
+                    }
+                }
+                $touched = array_values(array_unique($touched));
+
                 $stmts = array();
                 foreach ($ids as $id) {
                     $stmts[] = array('sql' => 'DELETE FROM post_taxonomy WHERE post_id = ?', 'params' => array($id));
                     $stmts[] = array('sql' => 'DELETE FROM posts WHERE wp_id = ?', 'params' => array($id));
                 }
-                // 清掉已经没有文章引用的分类/标签，避免站点上留下空分类
-                $stmts[] = array('sql' => 'DELETE FROM taxonomies WHERE slug NOT IN (SELECT DISTINCT taxonomy_slug FROM post_taxonomy)', 'params' => array());
+                // 只清理本次涉及、且已经没有任何文章引用的分类/标签
+                if ($touched) {
+                    $in2 = implode(',', array_fill(0, count($touched), '?'));
+                    $stmts[] = array(
+                        'sql' => "DELETE FROM taxonomies
+                                   WHERE slug IN ({$in2})
+                                     AND NOT EXISTS (
+                                         SELECT 1 FROM post_taxonomy pt
+                                          WHERE pt.taxonomy_slug = taxonomies.slug
+                                            AND pt.taxonomy_type = taxonomies.type
+                                     )",
+                        'params' => $touched,
+                    );
+                }
                 $this->d1_batch($stmts);
             }
             $this->log('批量删除远端清理完成：R2 ' . count($paths) . ' 个路径、D1 ' . count($ids) . ' 篇', 'INFO');
@@ -491,6 +529,16 @@ class CFSE_Sync_Worker_CMS {
             "CREATE INDEX IF NOT EXISTS idx_posts_lang_status_date ON posts(lang, status, date DESC)",
             "CREATE INDEX IF NOT EXISTS idx_posts_translation ON posts(translation_key)",
             "CREATE INDEX IF NOT EXISTS idx_pt_slug ON post_taxonomy(taxonomy_slug)",
+            // 2026-10-27 三条「按 rows_read 算账」补的索引（D1 按读行数计费）：
+            //   idx_pt_type_slug      侧边栏分类/标签统计，`WHERE taxonomy_type=? GROUP BY slug`
+            //                         没有它只能全表扫 + 逐行 JOIN posts（实测 13390 → 1662 行）
+            //   idx_posts_slug_lower  单页 slug 的大小写不敏感兜底查询（函数包列 ⇒ 用不上 UNIQUE 索引）
+            //                         触发它的大多是爬虫扫不存在路径（303 → 0 行）
+            //   idx_posts_status_ym   侧边栏按月归档 `GROUP BY substr(date,1,7)`（600 → 301 行）
+            // ⚠️ 与 cf-cms 的 schema.sql / ensureCoreSchema 必须一致，否则哪边先建库哪边说了算。
+            "CREATE INDEX IF NOT EXISTS idx_pt_type_slug ON post_taxonomy(taxonomy_type, taxonomy_slug)",
+            "CREATE INDEX IF NOT EXISTS idx_posts_slug_lower ON posts(lower(slug))",
+            "CREATE INDEX IF NOT EXISTS idx_posts_status_ym ON posts(status, substr(date, 1, 7))",
             // styles 表已随「文档库/风格库→R2」重构下线（docs/style-refactor.md）：
             // 模板存 R2 的 tpl.json，线上这张表早已不存在，不再建。
             "CREATE TABLE IF NOT EXISTS app_passwords (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL DEFAULT '', pass_hash TEXT NOT NULL, last_used_at TEXT DEFAULT '', created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)",
