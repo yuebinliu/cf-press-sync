@@ -70,6 +70,19 @@ case "$dup_out" in
   *"✗"*) echo "  ✗ 重复副本保护断言失败"; exit 1 ;;
 esac
 
+# 单篇同步面板（2026-10-27）：按归属显示对应动作，且不再把「什么都没写」报成成功。
+#   ① 发布框不再挂「重新同步」按钮  ② CMS 掌管篇只给版本检查  ③ WP 掌管篇只给重新同步
+#   ④ CMS 掌管篇同步必须返回 'skipped'，且不刷新 _cfse_synced_d1
+echo "=== ⑥c 单篇同步面板 ==="
+panel_out=$(plink -ssh -pw vr50we root@$HOST \
+  "docker exec $CONTAINER php $CONTAINER_DIR/test/verify-sync-panel.php 2>&1" 2>/dev/null \
+  | grep -vE "opcache|Warning: PHP Startup" || true)
+printf "%s\n" "$panel_out" | tail -14
+case "$panel_out" in
+  *"全部通过"*) : ;;
+  *) echo "  ✗ 单篇同步面板断言失败"; exit 1 ;;
+esac
+
 echo "=== ⑦ 真实登录态渲染 ==="
 plink -ssh -pw vr50we root@$HOST \
   "docker exec $CONTAINER php $CONTAINER_DIR/test/render-settings.php 2>&1" \

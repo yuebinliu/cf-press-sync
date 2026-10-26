@@ -1118,6 +1118,12 @@ class CFSE_Sync_Admin_UI {
 
     public function render_export_column($column, $post_id) {
         if ($column !== 'cf_exported') return;
+        // 归 CMS 所有的篇：数据本来就在 CMS 里，不存在「待同步」状态。
+        // （以前只看 _cfse_synced_d1，从 CMS 拉回来的篇没这个标记，会一直显示待同步。）
+        if ((int) CFSE_Sync_Worker_CMS::get_instance()->get_remote_wp_id($post_id) > 0) {
+            echo '<span title="本篇由 CMS 端诞生并维护，只能从 CMS 后台修改">☁️ CMS 掌管</span>';
+            return;
+        }
         if (get_post_meta($post_id, '_cfse_synced_d1', true)) {
             echo '<span title="文章数据已写入 D1；单页由 Worker 按需渲染">☁️ 已同步 D1</span>';
         } else {
@@ -1127,15 +1133,35 @@ class CFSE_Sync_Admin_UI {
 
 
     /**
-     * 「☁️ Worker 同步」面板（只对 Worker 端诞生的篇显示）：
-     * 异步查两端版本时间（不拖慢编辑页）+ 一键对齐本篇。
+     * 「☁️ CMS 同步」面板（已发布文章编辑页侧边栏）。
+     *
+     * 按**归属**分两条互斥路径，一个面板只出现一个动作：
+     *   · CMS 掌管（有 `_cfse_remote_wp_id`）→ 查版本 / 对齐本篇（CMS → WP）
+     *   · WordPress 掌管（无远端 ID）   → 重新同步到 CMS（WP → D1）
+     *
+     * 为什么合并：以前「重新同步到 D1」在发布框里，「检查 Worker 端版本」在侧边栏，
+     * 对 CMS 掌管的篇两个按钮同时出现、方向相反。而「重新同步」对这类篇必然 0 写入
+     * （write_to_d1 第一步的归属保护直接返回 skipped），点了之后 D1 毫无变化，
+     * 界面却提示成功 —— 2026-10-27 大魔王实测三次才发现。
      */
     public function render_worker_sync_metabox($post) {
         $pid = (int) $post->ID;
+        $remote = (int) CFSE_Sync_Worker_CMS::get_instance()->get_remote_wp_id($pid);
+        if ($remote > 0) {
+            $this->render_panel_cms_owned($pid, $remote);
+            return;
+        }
+        $this->render_panel_wp_owned($pid, $post);
+    }
+
+
+    /** 面板 A：本篇归 CMS 所有 —— 只能查版本、往里对齐，不能往外推 */
+    private function render_panel_cms_owned($pid, $remote) {
         $auto = !empty($this->config['worker_auto_check']);
         // 用链接而不是 <form>：WP 编辑页的主表单包裹整个编辑区，内层 <form> 会被浏览器忽略
         $align_url = wp_nonce_url(admin_url('admin-post.php?action=cfse_align_worker&post_id=' . $pid), 'cfse_align_worker_' . $pid);
-        echo '<p class="description">本篇由 <b>Worker 端诞生</b>，可把 Worker 的最新版本对齐过来。</p>';
+        echo '<p class="description" style="margin-top:0;">本篇内容归 <b>CMS</b> 所有（远端 #' . (int) $remote . '）。'
+            . '在这里改<b>不会</b>推到线上，要改正文请到 CMS 后台。</p>';
         echo '<p style="margin:8px 0;"><button type="button" class="button" id="cfse-check-btn">🔍 检查 Worker 端版本</button></p>';
         echo '<div id="cfse-worker-status" style="margin:8px 0;padding:8px;background:#f6f7f7;border-radius:3px;font-size:12px;line-height:1.7;color:#646970;">'
             . ($auto ? '正在查询…' : '点上面的按钮查询两端版本时间。') . '</div>';
@@ -1164,6 +1190,41 @@ class CFSE_Sync_Admin_UI {
             . '$("#cfse-check-btn").on("click",cfseCheck);'
             . 'if(' . ($auto ? 'true' : 'false') . '){cfseCheck();}'
             . '});</script>';
+    }
+
+
+    /** 面板 B：本篇归 WordPress 所有 —— 给一个「重新同步到 CMS」按钮 + 上次同步时间 */
+    private function render_panel_wp_owned($pid, $post) {
+        $sync_url = wp_nonce_url(admin_url('admin-post.php?action=cf_manual_export&post_id=' . $pid), 'cf_manual_export');
+        $synced_at = (int) get_post_meta($pid, '_cfse_synced_d1', true);
+        $modified  = (int) get_post_modified_time('U', true, $post);
+        // _cfse_synced_d1 写的是 time()（UTC 时间戳），post_modified_gmt 也是 UTC，可直接比
+        $stale = ($synced_at > 0 && $modified > $synced_at + 2);
+
+        echo '<p class="description" style="margin-top:0;">本篇归 <b>WordPress</b> 所有，'
+            . '改动会自动同步到 CMS。发布框里没有同步按钮了，就是这里这一个。</p>';
+
+        if ($synced_at > 0) {
+            echo '<p style="margin:8px 0 0;font-size:12px;color:#646970;">最近同步：'
+                . esc_html($this->human_span(max(0, time() - $synced_at), '前'));
+            if ($stale) {
+                echo '<br/><b style="color:#996800;">有改动尚未推送</b>';
+            }
+            echo '</p>';
+        } else {
+            echo '<p style="margin:8px 0 0;font-size:12px;color:#646970;">还没有同步过。</p>';
+        }
+
+        echo '<p style="margin:10px 0 0;"><a href="' . esc_url($sync_url) . '" class="button button-secondary">☁️ 重新同步到 CMS</a></p>';
+
+        $state = isset($_GET['cfse_resync']) ? (string) $_GET['cfse_resync'] : '';
+        if ($state === 'ok') {
+            echo '<p style="margin:8px 0 0;color:#1d6f42;"><b>✅ 已写入 CMS</b>（单页会在下次访问时重渲染）</p>';
+        } elseif ($state === 'skipped') {
+            echo '<p style="margin:8px 0 0;color:#996800;"><b>⚠︎ 没有写入</b>：该篇已归 CMS 所有，只能从 CMS 侧修改。</p>';
+        } elseif ($state === 'fail') {
+            echo '<p style="margin:8px 0 0;color:#b32d2e;"><b>❌ 同步失败</b>（详见同步日志）</p>';
+        }
     }
 
 

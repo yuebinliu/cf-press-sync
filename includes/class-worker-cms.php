@@ -634,7 +634,7 @@ class CFSE_Sync_Worker_CMS {
         $ok = $this->write_to_d1($meta['post_data'], $meta['categories'], $meta['tags']);
         if ($ok === 'skipped') {
             $this->log("草稿 {$post->ID} 由 Worker 端托管，跳过 D1 写入", 'INFO');
-            return true;
+            return 'skipped';
         }
         $this->log("草稿 {$post->ID} 同步到 D1（status=draft）：" . ($ok ? '成功' : '失败'), $ok ? 'INFO' : 'ERROR');
         return (bool) $ok;

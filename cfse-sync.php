@@ -207,7 +207,10 @@ class CFSE_Sync_Plugin {
 		add_action('deleted_comment', array($this, 'on_comment_deleted'), 10, 1);
 		add_action('admin_post_cfse_sync_comments', array($this, 'handle_sync_comments'));
 		add_action('admin_post_cfse_pull_comments', array($this, 'handle_pull_comments'));
-		add_action('post_submitbox_misc_actions', array($this, 'add_manual_export_button'));
+		// 「重新同步到 D1」不再挂在发布框（post_submitbox_misc_actions）：
+		// 那个位置的按钮对所有已发布文章都显示，而「CMS 掌管」的篇点了必然 0 写入
+		// （write_to_d1 第一步就因归属保护返回 skipped）。现在统一放进侧边栏
+		// 「☁️ CMS 同步」面板，按归属显示对应动作 —— 见 render_worker_sync_metabox()。
 		add_action('admin_post_cf_manual_export', array($this, 'handle_manual_export'));
 		add_action('admin_post_cf_sync_site_info', array($this, 'handle_sync_site_info'));
 		add_action('admin_post_cf_bulk_export', array($this, 'handle_bulk_export'));
@@ -407,7 +410,11 @@ public function get_config() {
             $start_time = microtime(true);
             $result = $this->sync_post_to_d1($post);
             $duration = round(microtime(true) - $start_time, 2);
-            if ($result) {
+            if ($result === 'skipped') {
+                // 由 CMS 掌管的篇：一个字节都没写。不能报「已同步」—— 以前就是这么报的，
+                // 于是后台点「重新同步」看起来一切正常，实际 D1 毫无变化，排查全靠猜。
+                $this->log("文章 {$post_id} 未写入：内容归 CMS 端所有（wp_id 在 CMS 端诞生），只能从 CMS 侧修改", 'INFO');
+            } elseif ($result) {
                 update_option('cf_last_export_time', current_time('mysql'));
                 update_post_meta($post_id, '_cfse_synced_d1', time());
                 delete_post_meta($post_id, '_cf_exported');   // 旧版「已导出」标记，本插件不再产生
@@ -454,9 +461,11 @@ public function get_config() {
             // 'skipped' = 该篇由 Worker 端托管，本次什么都没写。
             // 此时**必须原样返回**，不能往下走去删 R2 单页 —— 删了就成了
             // 「D1 没数据 + R2 没文件」= 页面 404（2026-10-21 真机踩坑）。
+            // 返回值必须是 'skipped' 而不是 true：调用方要据此区分「真的写了」和「什么都没写」，
+            // 否则界面上点一次「同步」、日志写「已同步到 D1，耗时 0.01s」，实际一个字都没进库。
             if ($res === 'skipped') {
                 $this->log("文章 {$post->ID} 由 Worker 端托管，跳过 D1 写入与单页清理（保持现状）", 'INFO');
-                return true;
+                return 'skipped';
             }
             if ($res) {
                 $written = true;
@@ -491,7 +500,9 @@ public function get_config() {
 
     /** 批量同步的单篇入口（全量同步 / 自动同步都走这里） */
     private function run_sync_mode($post_id) {
-        return (bool) $this->export_post($post_id, null, null, true);
+        // 不要 (bool)：skipped（= 该篇归 CMS 端所有，什么都没写）必须原样透出，
+        // 否则调用方只能看到「成功」，界面就无法区分「写了」和「跳过了」。
+        return $this->export_post($post_id, null, null, true);
     }
 
     private function build_post_meta($post) {
@@ -564,10 +575,14 @@ public function get_config() {
 
     public function add_doc_format_metabox($post_type = '', $post = null) {
         add_meta_box('cfse_doc_format', '📝 文档格式', array($this, 'render_doc_format_metabox'), 'post', 'side', 'high');
-        // 「Worker 端诞生」的篇（wp_id 为时间戳形态，见 ROADMAP I.1）额外给一个同步面板
-        $remote_id = ($post && isset($post->ID)) ? $this->get_remote_wp_id($post->ID) : 0;
-        if ($remote_id || ($post && isset($post->ID) && (int) $post->ID >= CFSE_WORKER_ID_MIN)) {
-            add_meta_box('cfse_worker_sync', '☁️ Worker 同步', array($this, 'render_worker_sync_metabox'), 'post', 'side', 'default');
+        // 「☁️ CMS 同步」面板：把单篇同步动作集中到侧边栏一处。
+        // 以前分成两处 —— 发布框里「重新同步到 D1」只看 post_status，对所有已发布文章都显示；
+        // 侧边栏「检查 Worker 端版本」只在 CMS 掌管的篇显示。结果 CMS 掌管的篇同时出现两个
+        // 方向相反的按钮，而「重新同步」那个点下去必然 0 写入（归属保护直接 skipped）。
+        // 现在一个面板按归属显示：CMS 掌管 → 查版本 / 对齐；WP 掌管 → 重新同步。
+        $is_publish = ($post && isset($post->post_status) && $post->post_status === 'publish');
+        if ($is_publish) {
+            add_meta_box('cfse_worker_sync', '☁️ CMS 同步', array($this, 'render_worker_sync_metabox'), 'post', 'side', 'default');
         }
     }
     public function render_doc_format_metabox($post) {
@@ -1307,12 +1322,6 @@ public function handle_deploy_worker() {
         return CFSE_Sync_Admin_UI::get_instance()->render_export_column($column, $post_id);
     }
 
-    public function add_manual_export_button() {
-        global $post;
-        if (!$post || !isset($post->post_status) || $post->post_status !== 'publish' || !current_user_can('manage_options')) return;
-        echo '<div class="misc-pub-section"><a href="' . esc_url(wp_nonce_url(admin_url('admin-post.php?action=cf_manual_export&post_id=' . $post->ID), 'cf_manual_export')) . '" class="button button-secondary">☁️ 重新同步到 D1</a></div>';
-    }
-
 
     /** 收集全部已发布文章的 ID（分批 200，避免大站一次性载入） */
     private function collect_published_ids() {
@@ -1522,13 +1531,17 @@ public function handle_deploy_worker() {
         exit;
     }
 
-    /** 单篇「☁️ 重新同步到 D1」（文章编辑页侧边栏按钮） */
+    /** 单篇「☁️ 重新同步到 CMS」（文章编辑页侧边栏面板里的按钮，只对 WP 掌管的篇出现） */
     public function handle_manual_export() {
         if (!current_user_can('manage_options')) wp_die('权限不足');
         check_admin_referer('cf_manual_export');
         $post_id = intval($_GET['post_id']);
-        if ($post_id > 0) $this->run_sync_mode($post_id);
-        wp_redirect(admin_url('post.php?post=' . $post_id . '&action=edit&cf_exported=1'));
+        $state = 'fail';
+        if ($post_id > 0) {
+            $r = $this->run_sync_mode($post_id);
+            $state = ($r === 'skipped') ? 'skipped' : ($r ? 'ok' : 'fail');
+        }
+        wp_redirect(admin_url('post.php?post=' . $post_id . '&action=edit&cfse_resync=' . $state));
         exit;
     }
 
