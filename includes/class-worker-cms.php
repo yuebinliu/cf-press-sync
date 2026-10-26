@@ -916,31 +916,56 @@ class CFSE_Sync_Worker_CMS {
      * 写一篇文章的全部数据到 D1。
      *
      * @return bool|string true = 写入成功；false = 失败（调用方应重试）；
-     *                     'skipped' = 该篇由 Worker 端托管，本次**什么都没写**。
+     *                     'skipped' = 本次什么都没写（调用方**不能**接着去删 R2 单页，
+     *                     否则会变成「D1 没数据 + R2 没文件」= 页面 404）。
      *
-     * 为什么要把 'skipped' 和 true 分开（2026-10-21 真机踩坑）：
+     * 为什么 'skipped' 必须和 true 分开（2026-10-21 真机踩坑）：
      *   原来这里 return true，调用方 sync_post_to_d1() 当成「写成功了」，
      *   接着就去 invalidate_single_page() 删 R2 里的单页。可这篇压根没写进 D1，
      *   删掉 R2 之后 Worker 既没有旧页面、D1 里也没有数据 ⇒ 页面直接 404。
-     *   真机表现：WP 2121 带着 _cfse_remote_wp_id（历史上「从 Worker 拉取」留下的），
-     *   被判定 Worker 托管 → 跳过写入 → 单页被删 → /what-is-cfse-2/ 变 404。
+     *
+     * 2026-10-27：归属硬拦截已拆（改成按两端时间戳判断，见下），
+     * 所以这条路径现在只在极端情况下返回 'skipped'，但契约保留 —— 调用方仍要按它分支。
      */
     public function write_to_d1($post_data, $categories, $tags, $only_ids = null) {
-        // 归属保护（必须先于任何语句执行）：Worker 端诞生的行整篇不写，连分类/标签关联一起跳过。
-        // 只靠下面 posts upsert 的 WHERE 护栏是不够的 —— 那只挡 posts 行，
-        // 而 post_taxonomy 的 DELETE 是无条件的，结果会变成「文章行没动、分类关联被删掉再按
-        // WP 侧分类重建」。WP 侧若没对上分类（WP 默认分类 slug 就是 uncategorized），
-        // 这些文章就全变「未分类」。2026-10-20 演示站 15 篇全变未分类正是这个洞。
-        if ((int) $post_data['wp_id'] >= (int) CFSE_WORKER_ID_MIN) {
-            $this->log('文章 wp_id=' . (int) $post_data['wp_id'] . ' 由 Worker 端托管，跳过 D1 写入（含分类关联）', 'INFO');
-            return 'skipped';
+        /*
+         * 归属保护（2026-10-27 改版）
+         * ==========================
+         * 以前这里是无条件硬拦截：`wp_id >= CFSE_WORKER_ID_MIN` ⇒ 直接 'skipped'，
+         * 连 force 也绕不过。理由是「CMS 是权威源，WP 导出不得覆盖」，代价是
+         * **在 WP 后台改 CMS 端的文章永远推不上去**（点了没反应，日志还说成功）。
+         * 但产品定位是「两个后台都能编辑」，硬拦与这个定位冲突。
+         *
+         * 现在把判断上移：由调用方（prepare_sync_item / sync_post_to_d1）
+         * 比较两端 modified，只在「远端比本地新」时才拒绝 —— 那才是真正会丢数据的情况。
+         * 这里不再拦归属，但保留一条**分类保护**（见下）。
+         */
+        $wp_id = (int) $post_data['wp_id'];
+        if ($wp_id <= 0) return false;
+
+        // 分类保护：WP 侧只解析出「未分类」，而这篇在 CMS 端本来有分类 ⇒ 不碰 post_taxonomy。
+        // 2026-10-20 演示站 15 篇全变未分类的事故就是这么来的：
+        // post_taxonomy 的 DELETE 是无条件的，WP 的分类 term 与 D1 的 taxonomy slug 对不上时，
+        // 会先把旧关联删干净、再按「未分类」重建。
+        // ⚠️ $categories 是**数组**（[['name'=>..,'slug'=>..]]），不是 JSON 字符串 ——
+        //    直接 (string) 会触发 "Array to string conversion" 并且永远判成 false。
+        $cat_slugs = array();
+        foreach ((array) $categories as $t) {
+            $s = is_array($t) ? (isset($t['slug']) ? $t['slug'] : '') : (is_object($t) ? $t->slug : '');
+            if ($s !== '') $cat_slugs[] = (string) $s;
+        }
+        $only_uncategorized = (empty($cat_slugs) || (count($cat_slugs) === 1 && $cat_slugs[0] === 'uncategorized'));
+        $protect_tax = false;
+        if ($only_uncategorized && $wp_id >= (int) CFSE_WORKER_ID_MIN) {
+            $this->log("文章 wp_id={$wp_id} 在 WP 侧只剩「未分类」，保留 CMS 端分类不动（只更新文章主体）", 'INFO');
+            $protect_tax = true;
         }
 
         // 0. 确保表结构存在（幂等）
         $this->ensure_d1_schema();
 
         // 整篇文章的全部 SQL 打包成一次批量提交（优先 Worker /d1-batch，替代逐句公网 D1 API）
-        $statements = $this->build_write_statements($post_data, $categories, $tags);
+        $statements = $this->build_write_statements($post_data, $categories, $tags, !$protect_tax, $protect_tax);
 
         $results = $this->d1_batch($statements);
         // 空数组 = 一个可用目标都没写成功（d1_batch 在「无可用目标」时返回等长 null 数组，
@@ -962,11 +987,31 @@ class CFSE_Sync_Worker_CMS {
      * 为什么这件事很重要：每篇的语句数直接决定一次 /d1-batch 能装几篇，而
      * 公网单次往返实测 0.9~1.3s（TCP 0.21s + TLS 0.24s + 回程），
      * 请求数就是总耗时。10 条/篇 → 4 篇/批；4 条/篇 → 11 篇/批。
+     *
+     * @param array $post_data    文章字段（wp_id / slug / title / content / …）
+     * @param array $categories   分类数组
+     * @param array $tags         标签数组
+     * @param bool  $with_tax     false = 不重建分类关联（签名没变时省 2~3 条语句）
+     * @param bool  $protect_tax  true  = posts 行的 categories/tags JSON 保留远端旧值
+     *                            （WP 侧只解析出「未分类」时用，见 write_to_d1）
      */
-    public function build_write_statements($post_data, $categories, $tags, $with_tax = true) {
+    public function build_write_statements($post_data, $categories, $tags, $with_tax = true, $protect_tax = false) {
         $st = array();
 
-        // 1. posts upsert（Worker 端诞生的行不覆盖：WHERE posts.wp_id < CFSE_WORKER_ID_MIN）
+        /*
+         * 1. posts upsert
+         *
+         * 两个护栏都是**为了让「两边都能改」成立**（2026-10-27）：
+         *
+         *   · `WHERE posts.modified <= excluded.modified` —— 应用层已经按两端时间戳
+         *     判断过一次，这里再兜一层：远端比本地新就不更新。即使调用方判断有误
+         *     （比如批量路径传了过期的 map），也不会用旧内容盖掉 CMS 侧的新版本。
+         *     `<=` 允许相等，保证幂等重放仍然生效。
+         *
+         *   · `? = 1` 是「分类保护」开关（$protect_tax）：WP 侧只解析出「未分类」时
+         *     不拿它去覆盖远端已有的分类 JSON。2026-10-20 演示站 15 篇全变未分类
+         *     就是分类 term 对不上导致的，这个开关是那道门的第二把锁。
+         */
         $st[] = array(
             'sql' => "INSERT INTO posts (wp_id, slug, title, content, content_format, excerpt, date, modified, status, comment_status, categories, tags, featured_image)
                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -976,12 +1021,31 @@ class CFSE_Sync_Worker_CMS {
                         -- excerpt 是派生字段（从正文截 200 字）。正文一字未变时保留 D1 里的旧摘要：
                         -- 否则每次「强制全量」都会按当前算法重算一遍，把上线以来的摘要
                         -- （有的是早期算法/导入时生成的）全部改写 —— 列表页文字会静默变化。
-                        -- 正文变了才重算，语义和旧实现一致。
                         excerpt = CASE WHEN posts.content = excluded.content THEN posts.excerpt ELSE excluded.excerpt END,
-                        date = excluded.date, modified = excluded.modified, status = excluded.status,
+                        date = excluded.date,
+                        -- modified 只在**实质内容真的变了**时才更新。
+                        -- WP 侧的 post_modified 有可能是「导入那一刻」的假值（2026-10-19 批量导入
+                        -- 留下的 16:00:0x），而 D1 里是 CMS 侧的真实时间。若每次推送都无条件写
+                        -- modified，一次全量同步就能把这些假时间戳铺满 D1，CMS 后台的时间全错。
+                        -- 用 IS 而不是 = ：NULL 安全的相等判断（featured_image 常为 NULL）。
+                        -- 不比较 categories/tags：分类可能被上面的保护开关故意保留旧值，
+                        -- 拿它参与判断会让 modified 无故更新。
+                        modified = CASE WHEN posts.content IS excluded.content
+                                         AND posts.title IS excluded.title
+                                         AND posts.slug IS excluded.slug
+                                         AND posts.status IS excluded.status
+                                         AND posts.comment_status IS excluded.comment_status
+                                         AND posts.featured_image IS excluded.featured_image
+                                         AND posts.content_format IS excluded.content_format
+                                    THEN posts.modified ELSE excluded.modified END,
+                        status = excluded.status,
                         comment_status = excluded.comment_status,
-                        categories = excluded.categories, tags = excluded.tags, featured_image = excluded.featured_image
-                      WHERE posts.wp_id < " . (int) CFSE_WORKER_ID_MIN,
+                        categories = CASE WHEN ? = 1 AND posts.categories IS NOT NULL AND posts.categories NOT IN ('', '[]')
+                                          THEN posts.categories ELSE excluded.categories END,
+                        tags = CASE WHEN ? = 1 AND posts.tags IS NOT NULL AND posts.tags NOT IN ('', '[]')
+                                    THEN posts.tags ELSE excluded.tags END,
+                        featured_image = excluded.featured_image
+                      WHERE posts.modified IS NULL OR posts.modified <= excluded.modified",
             'params' => array(
                 $post_data['wp_id'],
                 $post_data['slug'],
@@ -996,6 +1060,9 @@ class CFSE_Sync_Worker_CMS {
                 $post_data['categories'],
                 $post_data['tags'],
                 $post_data['featured_image'],
+                // 上面 SQL 里 categories/tags 两个 CASE 的「保护开关」（1 = 保留远端旧分类）
+                !empty($protect_tax) ? 1 : 0,
+                !empty($protect_tax) ? 1 : 0,
             ),
         );
 
@@ -1105,6 +1172,72 @@ class CFSE_Sync_Worker_CMS {
     public function note_slug($slug, $wp_id) {
         if (self::$slug_index === null) return;
         self::$slug_index[(string) $slug] = (int) $wp_id;
+    }
+
+
+    /**
+     * 批量取远端（D1）各篇的 modified —— 判断「两边谁更新」用。
+     *
+     * 为什么要批量：单篇一次 SELECT 就是一次 HTTP 往返（公网 0.4~1.3s），
+     * 300 篇逐篇查会把同步从 1 秒拖回十几分钟。一条 IN 查询（≤50 条语句上限内）
+     * 整批拿完，代价是一次往返。
+     *
+     * 返回：`[wp_id => 'Y-m-d H:i:s']`（**站点本地时间**，与 post_modified 同语义）
+     *
+     * @param int[]|null $wp_ids null = 全表（305 行也就几十 KB）
+     */
+    public function remote_modified_map($wp_ids = null) {
+        $sql = 'SELECT wp_id, modified FROM posts';
+        $params = array();
+        $chunks = array();
+        if (is_array($wp_ids)) {
+            $wp_ids = array_values(array_unique(array_filter(array_map('intval', $wp_ids))));
+            if (!$wp_ids) return array();
+            /*
+             * 分批：D1 单条语句的绑定参数有上限（实测 300 个就报
+             * `too many SQL variables at offset 250`）。全站 300 篇正好越线，
+             * 而且失败后会**降级成逐句直连 API**，把一次往返变成一串。
+             * 每批 100 个（一条 SQL 最多 101 个参数），300 篇 = 3 次请求。
+             */
+            $chunks = array_chunk($wp_ids, 100);
+        } else {
+            $chunks = array(null);
+        }
+        $map = array();
+        foreach ($chunks as $chunk) {
+            if ($chunk === null) {
+                $s = $sql;
+                $p = array();
+            } else {
+                $s = $sql . ' WHERE wp_id IN (' . implode(',', array_fill(0, count($chunk), '?')) . ')';
+                $p = $chunk;
+            }
+            $res = $this->d1_batch(array(array('sql' => $s, 'params' => $p)));
+            if (isset($res[0]) && is_array($res[0])) {
+                foreach ($res[0] as $row) {
+                    if (isset($row['wp_id'])) $map[(int) $row['wp_id']] = (string) $row['modified'];
+                }
+            }
+        }
+        return $map;
+    }
+
+
+    /**
+     * 把 D1 的 modified（站点本地时间）与 post_modified 换算到同一基准再比。
+     *
+     * ⚠️ 不能直接 strtotime 两端：`get_post_modified_time('U', true)` 给的是 **GMT 时间戳**，
+     * 而 D1 存的是**站点本地时间**（本站 UTC+8）。直接比会整体差 8 小时，
+     * 于是「刚在 CMS 改过的篇」被判成本地更新，反手覆盖掉 CMS 的改动。
+     *
+     * @return int 远端 modified 的 UTC 时间戳（0 = 无法解析）
+     */
+    public function remote_modified_ts($remote_modified) {
+        $s = trim((string) $remote_modified);
+        if ($s === '') return 0;
+        $gmt = get_gmt_from_date($s);          // 站点本地 → GMT 字符串
+        $ts = strtotime($gmt . ' UTC');
+        return $ts === false ? 0 : (int) $ts;
     }
 
     /**

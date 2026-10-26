@@ -1118,113 +1118,101 @@ class CFSE_Sync_Admin_UI {
 
     public function render_export_column($column, $post_id) {
         if ($column !== 'cf_exported') return;
-        // 归 CMS 所有的篇：数据本来就在 CMS 里，不存在「待同步」状态。
-        // （以前只看 _cfse_synced_d1，从 CMS 拉回来的篇没这个标记，会一直显示待同步。）
-        if ((int) CFSE_Sync_Worker_CMS::get_instance()->get_remote_wp_id($post_id) > 0) {
-            echo '<span title="本篇由 CMS 端诞生并维护，只能从 CMS 后台修改">☁️ CMS 掌管</span>';
+        if (get_post_meta($post_id, '_cfse_synced_d1', true)) {
+            echo '<span title="文章数据已写入 D1；单页由 Worker 按需渲染">☁️ 已同步</span>';
             return;
         }
-        if (get_post_meta($post_id, '_cfse_synced_d1', true)) {
-            echo '<span title="文章数据已写入 D1；单页由 Worker 按需渲染">☁️ 已同步 D1</span>';
-        } else {
-            echo '<span title="还没有同步到 D1">⏳ 待同步</span>';
+        // 归 CMS 所有的篇：内容本来就在 CMS 里，只是没在本站推过 —— 不算「待同步」
+        if ((int) CFSE_Sync_Worker_CMS::get_instance()->get_remote_wp_id($post_id) > 0) {
+            echo '<span title="本篇从 CMS 拉取而来，内容在 CMS 侧；两个后台都能改，按时间戳判新旧">☁️ CMS 篇</span>';
+            return;
         }
+        echo '<span title="还没有同步到 D1">⏳ 待同步</span>';
     }
 
 
     /**
      * 「☁️ CMS 同步」面板（已发布文章编辑页侧边栏）。
      *
-     * 按**归属**分两条互斥路径，一个面板只出现一个动作：
-     *   · CMS 掌管（有 `_cfse_remote_wp_id`）→ 查版本 / 对齐本篇（CMS → WP）
-     *   · WordPress 掌管（无远端 ID）   → 重新同步到 CMS（WP → D1）
+     * 2026-10-27 改版：WP 和 CMS **两个后台都能编辑同一篇**，不再有「谁拥有、另一个只能看」
+     * 这种事。面板给三样东西：
+     *   · 两端最后修改时间（异步查，不拖慢编辑页）
+     *   · 「推送到 CMS」—— 把 WP 版本发上去
+     *   · 「拉取 CMS 版本」—— 把 CMS 版本取回来（仅归 CMS 所有的篇显示）
      *
-     * 为什么合并：以前「重新同步到 D1」在发布框里，「检查 Worker 端版本」在侧边栏，
-     * 对 CMS 掌管的篇两个按钮同时出现、方向相反。而「重新同步」对这类篇必然 0 写入
-     * （write_to_d1 第一步的归属保护直接返回 skipped），点了之后 D1 毫无变化，
-     * 界面却提示成功 —— 2026-10-27 大魔王实测三次才发现。
+     * 推送前服务端还会比一次时间戳：CMS 侧更晚就拒绝（返回 remote_newer），
+     * 不会用旧内容盖掉 CMS 的改动。所以两个方向都可以点，丢数据的方向被兜住。
+     *
+     * 以前这里按归属二分（CMS 掌管只能拉、WP 掌管只能推），是因为 write_to_d1 里
+     * 有一道「wp_id >= 时间戳阈值就整篇不写」的硬拦截。那道拦截已按需求拆掉：
+     * 有时间戳就够判断谁新，一刀切会让 WP 侧对那批文章只能看不能改。
      */
     public function render_worker_sync_metabox($post) {
         $pid = (int) $post->ID;
         $remote = (int) CFSE_Sync_Worker_CMS::get_instance()->get_remote_wp_id($pid);
-        if ($remote > 0) {
-            $this->render_panel_cms_owned($pid, $remote);
-            return;
-        }
-        $this->render_panel_wp_owned($pid, $post);
-    }
-
-
-    /** 面板 A：本篇归 CMS 所有 —— 只能查版本、往里对齐，不能往外推 */
-    private function render_panel_cms_owned($pid, $remote) {
         $auto = !empty($this->config['worker_auto_check']);
         // 用链接而不是 <form>：WP 编辑页的主表单包裹整个编辑区，内层 <form> 会被浏览器忽略
-        $align_url = wp_nonce_url(admin_url('admin-post.php?action=cfse_align_worker&post_id=' . $pid), 'cfse_align_worker_' . $pid);
-        echo '<p class="description" style="margin-top:0;">本篇内容归 <b>CMS</b> 所有（远端 #' . (int) $remote . '）。'
-            . '在这里改<b>不会</b>推到线上，要改正文请到 CMS 后台。</p>';
-        echo '<p style="margin:8px 0;"><button type="button" class="button" id="cfse-check-btn">🔍 检查 Worker 端版本</button></p>';
+        $push_url = wp_nonce_url(admin_url('admin-post.php?action=cf_manual_export&post_id=' . $pid), 'cf_manual_export');
+        $pull_url = wp_nonce_url(admin_url('admin-post.php?action=cfse_align_worker&post_id=' . $pid), 'cfse_align_worker_' . $pid);
+        $synced_at = (int) get_post_meta($pid, '_cfse_synced_d1', true);
+
+        echo '<p class="description" style="margin-top:0;">'
+            . '两个后台都能改，按<b>最后修改时间</b>判定谁新；推送时会再比一次，CMS 侧更新就不写。</p>';
+
         echo '<div id="cfse-worker-status" style="margin:8px 0;padding:8px;background:#f6f7f7;border-radius:3px;font-size:12px;line-height:1.7;color:#646970;">'
-            . ($auto ? '正在查询…' : '点上面的按钮查询两端版本时间。') . '</div>';
-        echo '<p id="cfse-align-wrap" style="margin:8px 0;display:none;">'
-            . '<a href="' . esc_url($align_url) . '" class="button button-primary" id="cfse-align-btn">对齐本篇</a>'
-            . ' <span class="dashicons dashicons-editor-help" style="color:#787c82;vertical-align:text-bottom;" title="用 Worker 端的标题 / 正文 / 别名 / 分类标签覆盖本篇（会覆盖 WP 侧对该篇的修改）"></span>'
-            . '</p>';
+            . ($auto ? '正在查询…' : '点「检查版本」查询两端修改时间。') . '</div>';
+
+        echo '<p style="margin:8px 0 0;"><button type="button" class="button" id="cfse-check-btn">🔍 检查版本</button></p>';
+
+        echo '<p style="margin:8px 0 0;">'
+            . '<a href="' . esc_url($push_url) . '" class="button button-secondary" id="cfse-push-btn"'
+            . ' onclick="return confirm(\'把 WordPress 的版本推送到 CMS？\n\n如果 CMS 侧也改过，那边的改动会被覆盖。\')">'
+            . '☁️ 推送到 CMS</a></p>';
+
+        if ($remote > 0) {
+            echo '<p style="margin:6px 0 0;">'
+                . '<a href="' . esc_url($pull_url) . '" class="button" id="cfse-pull-btn"'
+                . ' onclick="return confirm(\'用 CMS 的版本覆盖本篇？\n\n本篇在 WordPress 侧的改动会被覆盖。\')">'
+                . '⬇️ 拉取 CMS 版本</a></p>';
+        }
+
+        if ($synced_at > 0) {
+            echo '<p style="margin:8px 0 0;font-size:12px;color:#8c8f94;">最近推送：'
+                . esc_html($this->human_span(max(0, time() - $synced_at), '前')) . '</p>';
+        }
+
+        // 动作结果
+        $state = isset($_GET['cfse_resync']) ? (string) $_GET['cfse_resync'] : '';
+        if ($state === 'ok') {
+            echo '<p style="margin:8px 0 0;color:#1d6f42;"><b>✅ 已写入 CMS</b>（单页下次访问时重渲染）</p>';
+        } elseif ($state === 'skipped') {
+            echo '<p style="margin:8px 0 0;color:#996800;"><b>⚠︎ 没有写入</b>：内容没有实质变化（或分类受保护）。</p>';
+        } elseif ($state === 'remote_newer') {
+            echo '<p style="margin:8px 0 0;color:#b32d2e;"><b>⚠︎ 没有写入</b>：CMS 侧版本更新，先「拉取 CMS 版本」对齐。</p>';
+        } elseif ($state === 'fail') {
+            echo '<p style="margin:8px 0 0;color:#b32d2e;"><b>❌ 同步失败</b>（详见同步日志）</p>';
+        }
         if (isset($_GET['cfse_aligned'])) {
             echo $_GET['cfse_aligned'] === '1'
-                ? '<p style="margin:8px 0 0;color:#2271b1;"><b>✅ 已对齐到 Worker 版本</b></p>'
-                : '<p style="margin:8px 0 0;color:#b32d2e;"><b>❌ 对齐失败</b>（未能从 Worker 取到该篇，见日志）</p>';
+                ? '<p style="margin:8px 0 0;color:#1d6f42;"><b>✅ 已拉取 CMS 版本</b></p>'
+                : '<p style="margin:8px 0 0;color:#b32d2e;"><b>❌ 拉取失败</b>（未取到该篇，见日志）</p>';
         }
+
         $ajax_nonce = wp_create_nonce('cfse_worker_status');
-        // 按钮只在「远端更新」时出现；本地较新 / 一致 都不给覆盖入口（避免误覆盖）
         echo '<script>jQuery(function($){'
-            . 'var $s=$("#cfse-worker-status"),$w=$("#cfse-align-wrap");'
+            . 'var $s=$("#cfse-worker-status");'
             . 'function cfseCheck(){'
-            . '$w.hide();$s.html("查询中…");'
+            . '$s.html("查询中…");'
             . '$.post(ajaxurl,{action:"cfse_worker_status",post_id:' . $pid . ',_ajax_nonce:"' . esc_js($ajax_nonce) . '"},function(r){'
-            . 'if(!r||!r.ok){$s.html("（查询不到 Worker 版本：该篇可能尚未同步到 Worker，或接口不可用）");return;}'
-            . 'var h="Worker 版本：" + r.worker_modified + "<br/>本篇版本：" + r.local_modified;'
-            . 'if(r.need_sync){h += "<br/><b style=\'color:#b32d2e;\'>⚠︎ 远端更新，建议对齐</b>";$w.show();}'
-            . 'else if(r.local_newer){h += "<br/><b style=\'color:#996800;\'>本地较新</b> —— 若以 Worker 版本覆盖，会丢失本地修改。";}'
+            . 'if(!r||!r.ok){$s.html("（CMS 上还没有这一篇，或接口不可用）");return;}'
+            . 'var h="本地：" + r.local_modified + "<br/>CMS：" + r.worker_modified;'
+            . 'if(r.need_sync){h += "<br/><b style=\'color:#b32d2e;\'>⚠︎ CMS 更新 —— 直接推送会被拒绝，先拉取</b>";}'
+            . 'else if(r.local_newer){h += "<br/><b style=\'color:#996800;\'>本地更新 —— 推送会覆盖 CMS 上的版本</b>";}'
             . 'else{h += "<br/><span style=\'color:#1d6f42;\'>✔ 两端一致</span>";}'
             . '$s.html(h);});}'
             . '$("#cfse-check-btn").on("click",cfseCheck);'
             . 'if(' . ($auto ? 'true' : 'false') . '){cfseCheck();}'
             . '});</script>';
-    }
-
-
-    /** 面板 B：本篇归 WordPress 所有 —— 给一个「重新同步到 CMS」按钮 + 上次同步时间 */
-    private function render_panel_wp_owned($pid, $post) {
-        $sync_url = wp_nonce_url(admin_url('admin-post.php?action=cf_manual_export&post_id=' . $pid), 'cf_manual_export');
-        $synced_at = (int) get_post_meta($pid, '_cfse_synced_d1', true);
-        $modified  = (int) get_post_modified_time('U', true, $post);
-        // _cfse_synced_d1 写的是 time()（UTC 时间戳），post_modified_gmt 也是 UTC，可直接比
-        $stale = ($synced_at > 0 && $modified > $synced_at + 2);
-
-        echo '<p class="description" style="margin-top:0;">本篇归 <b>WordPress</b> 所有，'
-            . '改动会自动同步到 CMS。发布框里没有同步按钮了，就是这里这一个。</p>';
-
-        if ($synced_at > 0) {
-            echo '<p style="margin:8px 0 0;font-size:12px;color:#646970;">最近同步：'
-                . esc_html($this->human_span(max(0, time() - $synced_at), '前'));
-            if ($stale) {
-                echo '<br/><b style="color:#996800;">有改动尚未推送</b>';
-            }
-            echo '</p>';
-        } else {
-            echo '<p style="margin:8px 0 0;font-size:12px;color:#646970;">还没有同步过。</p>';
-        }
-
-        echo '<p style="margin:10px 0 0;"><a href="' . esc_url($sync_url) . '" class="button button-secondary">☁️ 重新同步到 CMS</a></p>';
-
-        $state = isset($_GET['cfse_resync']) ? (string) $_GET['cfse_resync'] : '';
-        if ($state === 'ok') {
-            echo '<p style="margin:8px 0 0;color:#1d6f42;"><b>✅ 已写入 CMS</b>（单页会在下次访问时重渲染）</p>';
-        } elseif ($state === 'skipped') {
-            echo '<p style="margin:8px 0 0;color:#996800;"><b>⚠︎ 没有写入</b>：该篇已归 CMS 所有，只能从 CMS 侧修改。</p>';
-        } elseif ($state === 'fail') {
-            echo '<p style="margin:8px 0 0;color:#b32d2e;"><b>❌ 同步失败</b>（详见同步日志）</p>';
-        }
     }
 
 

@@ -411,9 +411,11 @@ public function get_config() {
             $result = $this->sync_post_to_d1($post);
             $duration = round(microtime(true) - $start_time, 2);
             if ($result === 'skipped') {
-                // 由 CMS 掌管的篇：一个字节都没写。不能报「已同步」—— 以前就是这么报的，
+                // 无需写入（例如分类保护）。不能报「已同步」—— 以前就是这么报的，
                 // 于是后台点「重新同步」看起来一切正常，实际 D1 毫无变化，排查全靠猜。
-                $this->log("文章 {$post_id} 未写入：内容归 CMS 端所有（wp_id 在 CMS 端诞生），只能从 CMS 侧修改", 'INFO');
+                $this->log("文章 {$post_id} 本次未写入（无实质变化或受保护），未改动远端", 'INFO');
+            } elseif ($result === 'remote_newer') {
+                $this->log("文章 {$post_id} 未写入：CMS 侧版本更新，先「拉取文章」对齐，或接受覆盖后再推", 'WARNING');
             } elseif ($result) {
                 update_option('cf_last_export_time', current_time('mysql'));
                 update_post_meta($post_id, '_cfse_synced_d1', time());
@@ -436,17 +438,31 @@ public function get_config() {
     /**
      * 单篇同步（草稿 / 已发布共用一条链路）：
      *   ① 元数据打包（含分类/标签、md 标记、评论开关）
-     *   ② 写 D1（write_to_d1 自带「Worker 端诞生」归属保护，不会覆盖 CMS 侧的文章）
-     *   ③ 同步正文里的图片到 R2（让静态站不依赖 WP 在线）
-     *   ④ 删掉 R2 里的旧单页，交给 Worker 重新渲染
+     *   ② 判断两端谁更新（CMS 更晚就停手，避免盖掉 CMS 的改动）
+     *   ③ 写 D1
+     *   ④ 同步正文里的图片到 R2（让静态站不依赖 WP 在线）
+     *   ⑤ 删掉 R2 里的旧单页，交给 Worker 重新渲染
      *
-     * @return bool
+     * @return bool|string true = 写入成功；'skipped' = 无需写（分类保护等）；
+     *                     'remote_newer' = CMS 侧更晚，本次不写
      */
     private function sync_post_to_d1($post) {
         if ($post->post_status === 'draft') {
-            return (bool) $this->sync_draft_to_d1($post);
+            return $this->sync_draft_to_d1($post);
         }
         $meta = $this->build_post_meta($post);
+
+        // ② 谁更新谁生效（单篇路径：一次 SELECT 换一次往返，可接受）
+        $worker = CFSE_Sync_Worker_CMS::get_instance();
+        $wid = (int) $meta['post_data']['wp_id'];
+        $map = $worker->remote_modified_map(array($wid));
+        $remote_ts = $worker->remote_modified_ts(isset($map[$wid]) ? $map[$wid] : '');
+        $local_ts = (int) get_post_modified_time('U', true, $post);
+        if ($remote_ts > 0 && $remote_ts > $local_ts + 1) {
+            $this->log("文章 {$post->ID} 未推送：CMS 侧更晚（远端 {$map[$wid]} / 本地 {$post->post_modified}），先拉取再改", 'WARNING');
+            return 'remote_newer';
+        }
+
         $sites = $this->get_post_sites($post->ID);
         if (empty($sites)) {
             $this->log("文章 {$post->ID} 未指定站点且未设默认站点，跳过同步（内容只留在本地 WP）", 'WARNING');
@@ -458,13 +474,12 @@ public function get_config() {
         $written = false;
         for ($i = 0; $i < $this->config['max_retries']; $i++) {
             $res = $this->write_to_d1($meta['post_data'], $meta['categories'], $meta['tags']);
-            // 'skipped' = 该篇由 Worker 端托管，本次什么都没写。
-            // 此时**必须原样返回**，不能往下走去删 R2 单页 —— 删了就成了
-            // 「D1 没数据 + R2 没文件」= 页面 404（2026-10-21 真机踩坑）。
-            // 返回值必须是 'skipped' 而不是 true：调用方要据此区分「真的写了」和「什么都没写」，
-            // 否则界面上点一次「同步」、日志写「已同步到 D1，耗时 0.01s」，实际一个字都没进库。
+            // 'skipped' = 本次什么都没写。**必须原样返回**，不能往下走去删 R2 单页 ——
+            // 删了就成了「D1 没数据 + R2 没文件」= 页面 404（2026-10-21 真机踩坑）。
+            // 也不能折成 true：界面上点一次「同步」、日志写「已同步到 D1，耗时 0.01s」，
+            // 实际一个字都没进库（2026-10-27 大魔王实测三次才发现）。
             if ($res === 'skipped') {
-                $this->log("文章 {$post->ID} 由 Worker 端托管，跳过 D1 写入与单页清理（保持现状）", 'INFO');
+                $this->log("文章 {$post->ID} 本次未写入（内容无需改动），跳过单页清理", 'INFO');
                 return 'skipped';
             }
             if ($res) {
@@ -1497,13 +1512,24 @@ public function handle_deploy_worker() {
         $post = get_post($post_id);
         if (!$post) wp_send_json(array('ok' => false));
         $remote_id = $this->get_remote_wp_id($post_id);
-        $remote = $remote_id ? $this->fetch_worker_post($remote_id) : null;
+        // WP 原生的篇在 D1 里的主键就是 WP 文章 ID —— 以前这里只查 remote_id，
+        // 于是「刚推送过的原生文章」查不到版本，面板一直显示"CMS 上还没有这一篇"。
+        $wid = $remote_id ? (int) $remote_id : (int) $post_id;
+        $remote = $this->fetch_worker_post($wid);
         if (!$remote) wp_send_json(array('ok' => false));
         $worker_mod = isset($remote['modified']) ? (string) $remote['modified'] : '';
         $local_mod = (string) $post->post_modified;
+        // 两端都是「站点本地时间」字符串，同一基准的相对比较是安全的
         $need = ($worker_mod !== '' && strtotime($worker_mod) > strtotime($local_mod));
         $local_newer = ($worker_mod !== '' && strtotime($local_mod) > strtotime($worker_mod));
-        wp_send_json(array('ok' => true, 'remote_wp_id' => $remote_id, 'worker_modified' => $worker_mod, 'local_modified' => $local_mod, 'need_sync' => $need, 'local_newer' => $local_newer));
+        wp_send_json(array(
+            'ok' => true,
+            'remote_wp_id' => $wid,
+            'worker_modified' => $worker_mod,
+            'local_modified' => $local_mod,
+            'need_sync' => $need,
+            'local_newer' => $local_newer,
+        ));
     }
     private function pull_posts_from_worker($overwrite = false) {
         return CFSE_Sync_Worker_CMS::get_instance()->pull_posts_from_worker($overwrite);
@@ -1539,7 +1565,9 @@ public function handle_deploy_worker() {
         $state = 'fail';
         if ($post_id > 0) {
             $r = $this->run_sync_mode($post_id);
-            $state = ($r === 'skipped') ? 'skipped' : ($r ? 'ok' : 'fail');
+            if ($r === 'skipped') $state = 'skipped';
+            elseif ($r === 'remote_newer') $state = 'remote_newer';
+            elseif ($r) $state = 'ok';
         }
         wp_redirect(admin_url('post.php?post=' . $post_id . '&action=edit&cfse_resync=' . $state));
         exit;
@@ -1581,16 +1609,41 @@ public function handle_deploy_worker() {
         $ok = 0;
         $skipped = 0;
         $failed = 0;
+        $remote_new = 0;
         $buf = array();          // 待写条目
         $stmts = 0;              // 已累计语句数（/d1-batch 硬上限 50）
         $only_ids = array();     // 本批涉及的托管目标 id
         $del_buf = array();      // 攒起来的待删单页路径（path => true）
         $del_ids = array();      // 这些路径涉及的托管目标
 
+        // 一次性取回 D1 侧所有相关篇的 modified（一条 IN 查询 = 一次往返）。
+        // 逐篇查会多 300 次公网请求，把 1 秒的增量同步拖回几分钟。
+        //
+        // ⚠️ 键要转成**远端 wp_id**：D1 的主键是 CMS 端的时间戳 ID，
+        //    而 $post_ids 是 WP 文章 ID。CMS 篇的映射在 meta 里，WP 原生篇就是它自己。
+        //    （传错的话 map 全是空，所有篇都被当成「远端没这行」—— 测试里就是这么被抓出来的。）
+        // 先做一次**纯本地**的快筛，只对「可能需要写」的篇查远端：
+        // 增量场景 300 篇全被「已同步且未变更」挡掉时，这一步能省掉整体一次查询。
+        $need_remote = array();
+        foreach ($post_ids as $pid) {
+            $p = get_post($pid);
+            if (!$p || $p->post_type !== 'post' || !in_array($p->post_status, array('publish', 'draft'), true)) continue;
+            if (!$force) {
+                $synced = (int) get_post_meta($pid, '_cfse_synced_d1', true);
+                if ($synced > 0 && (int) get_post_modified_time('U', true, $p) <= $synced) continue;
+            }
+            $r = (int) get_post_meta($pid, '_cfse_remote_wp_id', true);
+            if (!$r) $r = (int) get_post_meta($pid, '_cfsh_remote_wp_id', true);
+            $need_remote[$pid] = $r ?: (int) $pid;
+        }
+        $remote_mod = $need_remote
+            ? CFSE_Sync_Worker_CMS::get_instance()->remote_modified_map(array_values($need_remote))
+            : array();
+
         foreach ($post_ids as $id) {
-            $item = $this->prepare_sync_item($id, $force);
+            $item = $this->prepare_sync_item($id, $force, $remote_mod);
             if ($item === 'unchanged') { $skipped++; continue; }
-            if ($item === 'worker_owned') { $ok++; continue; }
+            if ($item === 'remote_newer') { $remote_new++; continue; }
             if ($item === null) { $failed++; continue; }
 
             $buf[] = $item;
@@ -1616,6 +1669,7 @@ public function handle_deploy_worker() {
         CFSE_Sync_Worker_CMS::get_instance()->flush_media_index();
         if ($ok > 0) update_option('cf_last_export_time', current_time('mysql'));
         if ($skipped > 0) $this->log("跳过未变更的文章 {$skipped} 篇（已同步且 post_modified 之后没再改）", 'INFO');
+        if ($remote_new > 0) $this->log("跳过 {$remote_new} 篇：CMS 侧比本地更新，先在「拉取文章」里对齐再改（否则会用旧内容盖掉 CMS 的改动）", 'WARNING');
         if ($failed > 0) $this->log("同步失败 {$failed} 篇", 'ERROR');
         return array($ok, $total);
     }
@@ -1631,10 +1685,14 @@ public function handle_deploy_worker() {
     /**
      * 为单篇准备「待写入条目」：组装 SQL、判断要不要清单页、算内容 hash。
      *
+     * @param int   $id
+     * @param bool  $force       true = 忽略「已同步且未变更」，强制重写
+     * @param array $remote_mod  `[wp_id => modified]`（D1 侧，站点本地时间）。
+     *                           由调用方一次批量查好传进来 —— 逐篇查会多 300 次往返。
      * @return array|string|null 数组 = 待写；'unchanged' = 已同步且未变更；
-     *                           'worker_owned' = Worker 托管（跳过，算成功）；null = 无法同步
+     *                           'remote_newer' = CMS 侧更晚（跳过，先拉取）；null = 无法同步
      */
-    private function prepare_sync_item($id, $force) {
+    private function prepare_sync_item($id, $force, $remote_mod = array()) {
         $post = get_post($id);
         if (!$post || $post->post_type !== 'post') return null;
         if (!in_array($post->post_status, array('publish', 'draft'), true)) return null;
@@ -1650,11 +1708,31 @@ public function handle_deploy_worker() {
 
         $meta = $this->build_post_meta($post);
         $pd = $meta['post_data'];
+        $worker = CFSE_Sync_Worker_CMS::get_instance();
 
-        // ② 归属保护：Worker 端诞生的篇整篇不写（连分类关联一起），也绝不删它的单页
-        if ((int) $pd['wp_id'] >= (int) CFSE_WORKER_ID_MIN) {
-            $this->log("文章 {$id} 由 Worker 端托管，跳过 D1 写入与单页清理（保持现状）", 'INFO');
-            return 'worker_owned';
+        /*
+         * ② 谁更新谁生效（取代旧的「Worker 端诞生的篇一律不写」）
+         *
+         * 2026-10-27 改：产品定位是「WP 后台和 CMS 后台都能编辑」，一刀切按 ID 段
+         * 拦死归属，等于宣布 WP 侧对那批文章只能看不能改 —— 而且点了没反应、日志还说成功。
+         * 现在改成按时间戳判断：只有「CMS 侧更晚」才拒绝，因为那才是真正会丢改动的场景。
+         *
+         * ⚠️ 基准换算：D1 的 modified 是**站点本地时间**，post_modified 也是本地时间，
+         * 但 get_post_modified_time('U', true) 返回的是 **GMT 时间戳** ⇒
+         * 必须经 remote_modified_ts() 换算，否则整体差一个时区（本站 8 小时），
+         * 「刚在 CMS 改过的篇」会被判成本地更新，反手把 CMS 的改动盖掉。
+         */
+        $wid = (int) $pd['wp_id'];
+        $remote_mod = isset($remote_mod[$wid]) ? $remote_mod[$wid] : '';
+        $local_ts = (int) get_post_modified_time('U', true, $post);
+        $remote_ts = $worker->remote_modified_ts($remote_mod);
+        if ($remote_ts > 0 && $remote_ts > $local_ts + 1) {   // +1s：同秒抖动不算远端更新
+            $this->log("文章 {$id} 跳过：CMS 侧更晚（远端 {$remote_mod} / 本地 {$post->post_modified}），先拉取再改", 'WARNING');
+            return 'remote_newer';
+        }
+        if ($wid >= (int) CFSE_WORKER_ID_MIN && $remote_ts === 0) {
+            // 归 CMS 所有却查不到远端行（被删了）：可以写回去（等价于重建），记一笔便于排查
+            $this->log("文章 {$id} 归 CMS 所有但 D1 里暂无该行，将整篇写入", 'INFO');
         }
 
         if ($post->post_status === 'draft') {
@@ -1669,8 +1747,6 @@ public function handle_deploy_worker() {
         }
         $only_ids = array();
         foreach ($sites as $st) $only_ids[] = (string) $st['id'];
-
-        $worker = CFSE_Sync_Worker_CMS::get_instance();
 
         // ④ slug 归属检查（`posts.slug` 是 UNIQUE，而 upsert 只处理 wp_id 冲突）
         //    典型场景：这篇是「从 CMS 拉下来的同名副本」——它的 slug 已被 D1 里
