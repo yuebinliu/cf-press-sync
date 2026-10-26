@@ -136,9 +136,10 @@ class CFSE_Sync_Admin_UI {
                                 <div class="cfse-ops">
                                     <div class="cfse-op">
                                         <span class="cfse-op-label">文章</span>
-                                        <button type="submit" form="cfse-act-bulk" class="button button-primary" onclick="return confirm('把全部已发布文章同步到 CMS？确认继续。')">同步文章到 CMS</button>
+                                        <button type="submit" form="cfse-act-bulk" class="button button-primary" onclick="return confirm('把已发布文章同步到 CMS？未变更的会自动跳过，确认继续。')">同步文章到 CMS</button>
                                         <button type="submit" form="cfse-pull-form" class="button" onclick="return confirm('从 CMS 拉取「CMS 端诞生」的文章到 WordPress？确认继续。')">拉取文章</button>
                                         <label class="cfse-check cfse-op-note"><input type="checkbox" name="cfse_pull_overwrite" value="1" form="cfse-pull-form" /> 拉取时覆盖已有文章</label>
+                                        <label class="cfse-check cfse-op-note"><input type="checkbox" name="cfse_force_all" value="1" form="cfse-act-bulk" /> 强制重写全部（忽略「已同步且未变更」）</label>
                                     </div>
                                     <div class="cfse-op">
                                         <span class="cfse-op-label">评论</span>

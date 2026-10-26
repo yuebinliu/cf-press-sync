@@ -127,6 +127,18 @@ if (!extension_loaded('curl')) {
 class CFSE_Sync_Plugin {
     /** 文章所属站点的 meta 键（可见字段，便于后台「自定义字段」手动改；多值 = 多个站点） */
     const META_SITE = 'cfse_site';
+
+    /**
+     * 批量同步：一次 /d1-batch 最多合并多少条 SQL。
+     *
+     * Worker 侧 `/d1-batch` 用 `statements.slice(0, 50)` 硬截断，**超出的会被静默丢弃**
+     * （不报错，只是没执行）。所以这里必须自己控住，留 5 条余量。
+     * 一篇现在固定 2~4 条语句（多行 VALUES）⇒ 一批约 11 篇。
+     */
+    const BATCH_MAX_STMTS = 45;
+
+    /** 一次 /delete 最多带多少个路径（单页 + .gz 各算一个，一篇贡献 2 个） */
+    const BATCH_MAX_PATHS = 100;
     /** 托管目标「⚙️ 配置」弹窗的 HTML（渲染表格行时收集，表格之后统一输出为 modal） */
     private $target_modals = array();
     private $reported_dir_failure = false;
@@ -1256,7 +1268,11 @@ public function handle_deploy_worker() {
         // 只动 WP 侧记账 —— 不碰 D1 / R2 / site:ctx（那些归 CMS 自己管）。
         $wpdb->delete($wpdb->postmeta, array('meta_key' => '_cf_exported'));
         $wpdb->delete($wpdb->postmeta, array('meta_key' => '_cfse_synced_d1'));
-        $this->log('已重置同步标记（_cf_exported / _cfse_synced_d1 已清空）', 'INFO');
+        // 内容 hash 与图片指纹也要清，否则「强制重写全部」仍会跳过单页失效、图片也不重传
+        $wpdb->delete($wpdb->postmeta, array('meta_key' => '_cfse_hash'));
+        $wpdb->delete($wpdb->postmeta, array('meta_key' => '_cfse_tax_sig'));
+        delete_option('cfse_media_index');
+        $this->log('已重置同步标记（_cf_exported / _cfse_synced_d1 / 内容 hash / 图片指纹 已清空）', 'INFO');
         wp_redirect(admin_url('options-general.php?page=cfse-sync&cache_cleared=1'));
         exit;
     }
@@ -1279,10 +1295,11 @@ public function handle_deploy_worker() {
             array('key' => '_cf_exported', 'compare' => 'NOT EXISTS'),
             array('key' => '_cfse_synced_d1', 'compare' => 'NOT EXISTS'),
         ), 'posts_per_page' => $this->config['batch_size']));
-        foreach ($posts as $post) {
-            $this->export_post($post->ID);
-        }
-        $this->log("自动同步完成，处理了 " . count($posts) . " 篇文章", 'INFO');
+        $ids = array();
+        foreach ($posts as $post) $ids[] = (int) $post->ID;
+        // 走批量通道：这些篇本来就从没同步过，force=false 的「跳过未变更」不会误跳
+        list($ok, $total) = $this->sync_posts($ids, false);
+        $this->log("自动同步完成，处理了 {$total} 篇（成功 {$ok}）", 'INFO');
     }
 
     public function add_export_column($columns) { $columns['cf_exported'] = '☁️ 同步状态'; return $columns; }
@@ -1520,12 +1537,14 @@ public function handle_deploy_worker() {
         check_admin_referer('cf_bulk_export');
         @set_time_limit(0);
         @ignore_user_abort(true);
+        // 「强制重写全部」勾选框（默认不勾 = 跳过已同步且未变更的，见 prepare_sync_item）
+        $force = !empty($_POST['cfse_force_all']);
         // 先确保 D1 表结构为 v2（旧结构自动重建），随后全量重导会重写结构化 categories/tags
         $this->ensure_d1_schema();
         $all = $this->collect_published_ids();
 
-        $this->log('全量同步开始，共 ' . count($all) . ' 篇（只写 D1，单页由 Worker 渲染）', 'INFO');
-        list($success, $total) = $this->sync_posts($all);
+        $this->log('全量同步开始，共 ' . count($all) . ' 篇（只写 D1，单页由 Worker 渲染）' . ($force ? '，强制重写全部' : '，跳过未变更'), 'INFO');
+        list($success, $total) = $this->sync_posts($all, $force);
         $this->log("全量同步完成：成功 {$success} / {$total}", 'INFO');
         update_option('cf_exported_count', $success);
         wp_redirect(admin_url('options-general.php?page=cfse-sync&exported=' . $success . '&total=' . $total));
@@ -1538,18 +1557,231 @@ public function handle_deploy_worker() {
      * @param array $post_ids 文章 ID 列表
      * @return array [成功数, 总数]
      */
-    private function sync_posts($post_ids) {
+    private function sync_posts($post_ids, $force = false) {
         $post_ids = array_values(array_unique(array_map('intval', (array) $post_ids)));
         $post_ids = array_values(array_filter($post_ids, function ($id) { return $id > 0; }));
         $total = count($post_ids);
         if ($total === 0) return array(0, 0);
         @set_time_limit(0);
         @ignore_user_abort(true);
+
         $ok = 0;
+        $skipped = 0;
+        $failed = 0;
+        $buf = array();          // 待写条目
+        $stmts = 0;              // 已累计语句数（/d1-batch 硬上限 50）
+        $only_ids = array();     // 本批涉及的托管目标 id
+        $del_buf = array();      // 攒起来的待删单页路径（path => true）
+        $del_ids = array();      // 这些路径涉及的托管目标
+
         foreach ($post_ids as $id) {
-            if ($this->run_sync_mode($id)) $ok++;
+            $item = $this->prepare_sync_item($id, $force);
+            if ($item === 'unchanged') { $skipped++; continue; }
+            if ($item === 'worker_owned') { $ok++; continue; }
+            if ($item === null) { $failed++; continue; }
+
+            $buf[] = $item;
+            $stmts += count($item['statements']);
+            foreach ($item['only_ids'] as $sid) $only_ids[$sid] = true;
+
+            if ($stmts >= self::BATCH_MAX_STMTS) {
+                list($ok, $failed, $d) = $this->flush_sync_buffer($buf, array(), $ok, $failed);
+                foreach ($d as $p) $del_buf[$p] = true;
+                foreach ($only_ids as $sid => $t) $del_ids[$sid] = true;
+                $buf = array(); $stmts = 0; $only_ids = array();
+                // 攒够 4 条请求的量再删：606 个路径从 27 次请求降到 4 次
+                if (count($del_buf) >= self::BATCH_MAX_PATHS) $this->flush_delete_buffer($del_buf, $del_ids);
+            }
         }
+        if ($buf) {
+            list($ok, $failed, $d) = $this->flush_sync_buffer($buf, array(), $ok, $failed);
+            foreach ($d as $p) $del_buf[$p] = true;
+            foreach ($only_ids as $sid => $t) $del_ids[$sid] = true;
+        }
+        $this->flush_delete_buffer($del_buf, $del_ids);
+
+        CFSE_Sync_Worker_CMS::get_instance()->flush_media_index();
+        if ($ok > 0) update_option('cf_last_export_time', current_time('mysql'));
+        if ($skipped > 0) $this->log("跳过未变更的文章 {$skipped} 篇（已同步且 post_modified 之后没再改）", 'INFO');
+        if ($failed > 0) $this->log("同步失败 {$failed} 篇", 'ERROR');
         return array($ok, $total);
+    }
+
+    /** 把攒起来的单页路径一次删掉（/delete 支持 paths 数组，一次请求删多个） */
+    private function flush_delete_buffer(&$buf, &$ids) {
+        if (empty($buf)) return;
+        $paths = array_keys($buf);
+        $buf = array();
+        $this->delete_from_r2($paths, $ids ? array_keys($ids) : null);
+    }
+
+    /**
+     * 为单篇准备「待写入条目」：组装 SQL、判断要不要清单页、算内容 hash。
+     *
+     * @return array|string|null 数组 = 待写；'unchanged' = 已同步且未变更；
+     *                           'worker_owned' = Worker 托管（跳过，算成功）；null = 无法同步
+     */
+    private function prepare_sync_item($id, $force) {
+        $post = get_post($id);
+        if (!$post || $post->post_type !== 'post') return null;
+        if (!in_array($post->post_status, array('publish', 'draft'), true)) return null;
+        if (get_post_meta($id, '_cfse_probe', true) === '1') return null;
+
+        // ① 已同步且文章在那之后没改过 → 整篇跳过（这是最大的一笔省：325 篇里 292 篇属此类）
+        //    ⚠️ 必须用「GMT 时间戳」比，不能 strtotime(post_modified)：
+        //    post_modified 存的是**站点本地时间**（本站 UTC+8），而 WP 的默认时区是 UTC，
+        //    strtotime() 会把它当成 UTC ⇒ 比真实时间早 8 小时 ⇒ 最近 8 小时内改过的文章
+        //    永远被判成「未来修改」，每轮都重写一遍（实测 13 篇反复重推就是这么来的）。
+        $synced = (int) get_post_meta($id, '_cfse_synced_d1', true);
+        if (!$force && $synced > 0 && (int) get_post_modified_time('U', true, $post) <= $synced) return 'unchanged';
+
+        $meta = $this->build_post_meta($post);
+        $pd = $meta['post_data'];
+
+        // ② 归属保护：Worker 端诞生的篇整篇不写（连分类关联一起），也绝不删它的单页
+        if ((int) $pd['wp_id'] >= (int) CFSE_WORKER_ID_MIN) {
+            $this->log("文章 {$id} 由 Worker 端托管，跳过 D1 写入与单页清理（保持现状）", 'INFO');
+            return 'worker_owned';
+        }
+
+        if ($post->post_status === 'draft') {
+            $pd['status'] = 'draft';
+            if (empty($pd['slug'])) $pd['slug'] = 'draft-' . $post->ID;
+        }
+
+        $sites = $this->get_post_sites($post->ID);
+        if (empty($sites)) {
+            $this->log("文章 {$id} 未指定站点且未设默认站点，跳过同步（内容只留在本地 WP）", 'WARNING');
+            return null;
+        }
+        $only_ids = array();
+        foreach ($sites as $st) $only_ids[] = (string) $st['id'];
+
+        $worker = CFSE_Sync_Worker_CMS::get_instance();
+
+        // ④ slug 归属检查（`posts.slug` 是 UNIQUE，而 upsert 只处理 wp_id 冲突）
+        //    典型场景：这篇是「从 CMS 拉下来的同名副本」——它的 slug 已被 D1 里
+        //    wp_id=1792… 那行占用，直接 INSERT 会撞 UNIQUE 让整批 500。
+        $owner = $worker->slug_owner($pd['slug']);
+        if ($owner && $owner !== (int) $pd['wp_id']) {
+            if ($owner >= (int) CFSE_WORKER_ID_MIN) {
+                $this->log("文章 {$id} 的 slug「{$pd['slug']}」已被 CMS 端同篇占用（wp_id={$owner}），跳过：内容已在 CMS", 'WARNING');
+                // 记为已同步，免得它永远挂在「待同步」里每轮重试
+                update_post_meta($id, '_cfse_synced_d1', time());
+                return 'unchanged';
+            }
+            $this->log("文章 {$id} 的 slug「{$pd['slug']}」与 D1 中另一篇（wp_id={$owner}）冲突，跳过不覆盖", 'ERROR');
+            return null;
+        }
+
+        // 分类/标签签名：没变就不重建关联。
+        // D1 每条语句内部约 0.1s，一篇 4 条 → 1 条，全量语句数直接降到 1/4。
+        $tax_sig = md5((string) wp_json_encode(array($meta['categories'], $meta['tags'])));
+        $with_tax = ((string) get_post_meta($id, '_cfse_tax_sig', true) !== $tax_sig);
+        $statements = $worker->build_write_statements($pd, $meta['categories'], $meta['tags'], $with_tax);
+
+        // ③ 内容 hash：没变就不清 R2 单页。
+        //    旧实现每篇都删单页 ⇒ 点一次全量同步 = 清空整站页面缓存，
+        //    之后每个页面首访都要现场渲染（4 次 D1 + 模板渲染）。
+        $hash = md5(implode("\x1f", array(
+            (string) $pd['slug'], (string) $pd['title'], (string) $pd['content'],
+            (string) $pd['excerpt'], (string) $pd['status'],
+            (string) $pd['categories'], (string) $pd['tags'], (string) $pd['featured_image'],
+        )));
+        $prev = (string) get_post_meta($id, '_cfse_hash', true);
+        $delete_paths = array();
+        if ($prev !== $hash) {
+            $path = $this->get_post_storage_path($post);
+            if ($path !== '') {
+                $delete_paths[] = $path;
+                $delete_paths[] = $path . '.gz';
+            }
+        }
+
+        return array(
+            'id' => $id,
+            'post_data' => $pd,
+            'categories' => $meta['categories'],
+            'tags' => $meta['tags'],
+            'only_ids' => $only_ids,
+            'statements' => $statements,
+            'delete_paths' => $delete_paths,
+            'hash' => $hash,
+            'tax_sig' => $tax_sig,
+            'content' => $post->post_content,
+        );
+    }
+
+    /**
+     * 冲刷一个批次：一次 /d1-batch 写完 → 记账 → 一次 /delete 清掉失效单页。
+     * 整批失败时回退为逐篇写入（幂等 upsert，重放无副作用）。
+     */
+    private function flush_sync_buffer($items, $only_ids, $ok, $failed) {
+        if (empty($items)) return array($ok, $failed, array());
+        $worker = CFSE_Sync_Worker_CMS::get_instance();
+        $ok_ids = array();
+        $this->write_items_resilient($items, $ok_ids);
+
+        $del = array();
+        foreach ($items as $it) {
+            if (isset($ok_ids[$it['id']])) {
+                $ok++;
+                update_post_meta($it['id'], '_cfse_synced_d1', time());
+                update_post_meta($it['id'], '_cfse_hash', $it['hash']);
+                update_post_meta($it['id'], '_cfse_tax_sig', $it['tax_sig']);
+                delete_post_meta($it['id'], '_cf_exported');
+                $worker->note_slug($it['post_data']['slug'], $it['post_data']['wp_id']);
+                $this->sync_media_files($it['content']);
+                foreach ($it['delete_paths'] as $p) $del[] = $p;
+            } else {
+                $failed++;
+            }
+        }
+        $this->log('批量写入 ' . count($items) . ' 篇（单批 ' . array_sum(array_map(function ($x) { return count($x['statements']); }, $items)) . ' 条 SQL）', 'DEBUG');
+        // 单页失效路径交给调用方攒批（见 sync_posts），别每批都发一次 /delete
+        return array($ok, $failed, $del);
+    }
+
+    /**
+     * 批量写入 + 失败二分定位。
+     *
+     * 一条坏语句会让整批 /d1-batch 500。如果这时逐篇重试 12 篇，最坏 12 × 3 次 × 2 请求
+     * ≈ 一分钟；二分则只要 log2(12) ≈ 4 次就能定位到那一篇，剩下的一次性写完。
+     * 真正的单篇（切到只剩 1 篇）才走带降级/重试的 write_to_d1 ——
+     * 那条路径保留「Worker 不可达则直连 D1 API」的兜底。
+     */
+    private function write_items_resilient($items, &$ok_ids) {
+        if (empty($items)) return;
+
+        if (count($items) === 1) {
+            $it = $items[0];
+            if ($this->write_to_d1_with_retry($it['post_data'], $it['categories'], $it['tags'], $it['only_ids'])) {
+                $ok_ids[$it['id']] = true;
+            }
+            return;
+        }
+
+        $worker = CFSE_Sync_Worker_CMS::get_instance();
+        if ($worker->write_batch($items)) {
+            foreach ($items as $it) $ok_ids[$it['id']] = true;
+            return;
+        }
+
+        $half = (int) floor(count($items) / 2);
+        $this->log('批量写入失败，二分排查（' . count($items) . ' 篇 → ' . $half . ' + ' . (count($items) - $half) . '）', 'WARNING');
+        $this->write_items_resilient(array_slice($items, 0, $half), $ok_ids);
+        $this->write_items_resilient(array_slice($items, $half), $ok_ids);
+    }
+
+    /** 逐篇写入 + 重试（批量失败后的兜底路径） */
+    private function write_to_d1_with_retry($post_data, $categories, $tags, $only_ids = null) {
+        $tries = max(1, (int) $this->config['max_retries']);
+        for ($i = 0; $i < $tries; $i++) {
+            $res = $this->write_to_d1($post_data, $categories, $tags, $only_ids);
+            if ($res === 'skipped' || $res) return true;
+            usleep(300000);
+        }
+        return false;
     }
 
     /**

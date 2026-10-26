@@ -141,6 +141,30 @@ class CFSE_Sync_Transports {
         );
         if ($key !== '') $args['headers']['X-Auth-Key'] = $key;
         if ($body !== null) $args['body'] = wp_json_encode($body);
+
+        // 优先走进程内复用的 cURL 句柄（keep-alive）。
+        // 实测同一接口：新建连接 0.95~1.32s，复用连接 0.43s。批量同步时删除单页
+        // 会发几十次请求，光 TLS 握手就是十几秒。
+        // 返回值刻意构造成 WP 响应数组的形状，调用方的
+        // wp_remote_retrieve_response_code() / wp_remote_retrieve_body() 不用改。
+        $hcms = CFSE_Sync_Worker_CMS::get_instance();
+        $r = $hcms->http_request(
+            strtoupper($method),
+            $base . $route,
+            isset($args['body']) ? $args['body'] : null,
+            $args['headers'],
+            $timeout
+        );
+        if ($r !== null) {
+            return array(
+                'headers'  => array(),
+                'body'     => $r['body'],
+                'response' => array('code' => $r['code'], 'message' => ''),
+                'cookies'  => array(),
+                'filename' => null,
+            );
+        }
+
         $resp = wp_remote_request($base . $route, $args);
         if (is_wp_error($resp)) {
             $this->log('托管目标 ' . $id . ' 请求失败(' . $route . ')：' . $resp->get_error_message(), 'ERROR');

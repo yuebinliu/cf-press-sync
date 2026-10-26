@@ -37,6 +37,7 @@ $cfse_options = array(
     'cf_last_export_time',
     'cfse_db_version',
     'cfse_active_style',
+    'cfse_media_index',
 );
 
 foreach ($cfse_options as $opt) {
@@ -46,6 +47,8 @@ foreach ($cfse_options as $opt) {
 // 清理文章上的同步标记 meta
 delete_metadata('post', 0, '_cfse_synced_d1', '', true);
 delete_metadata('post', 0, '_cf_exported', '', true);
+delete_metadata('post', 0, '_cfse_hash', '', true);
+delete_metadata('post', 0, '_cfse_tax_sig', '', true);
 
 // 清理定时任务
 wp_clear_scheduled_hook('cf_auto_export_cron');
