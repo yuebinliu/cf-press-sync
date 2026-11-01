@@ -143,6 +143,10 @@ class CFSE_Sync_Plugin {
      */
     const BATCH_MAX_STMTS = 45;
 
+    /** save_post 触发的待同步队列（同一请求内多次保存只同步一次，且推迟到 shutdown 时再读数据） */
+    private static $pending_export_ids = array();
+    private static $export_flush_registered = false;
+
     /** 一次 /delete 最多带多少个路径（单页 + .gz 各算一个，一篇贡献 2 个） */
     const BATCH_MAX_PATHS = 100;
     /** 托管目标「⚙️ 配置」弹窗的 HTML（渲染表格行时收集，表格之后统一输出为 modal） */
@@ -188,7 +192,7 @@ class CFSE_Sync_Plugin {
 	private function init_hooks() {
 		add_action('admin_menu', array($this, 'add_admin_menu'));
 		add_action('admin_init', array($this, 'register_settings'));
-		add_action('save_post', array($this, 'export_post'), 10, 3);
+		add_action('save_post', array($this, 'queue_export'), 10, 3);
 		add_action('add_meta_boxes', array($this, 'add_doc_format_metabox'), 10, 2);
 		add_action('add_meta_boxes', array($this, 'add_site_metabox'), 10, 2);
 		add_action('admin_post_cfse_align_worker', array($this, 'handle_align_worker'));
@@ -376,6 +380,40 @@ public function get_config() {
     // → 回填 R2），所以插件侧既不渲染也不上传。数据一变就删掉 R2 里的旧单页，让
     // Worker 下次访问时用最新内容重新渲染 —— 否则会一直读到上一次的旧页面。
     // ============================================
+    /**
+     * save_post 回调：**只入队**，真正的同步推迟到 shutdown。
+     *
+     * 为什么不能直接在 save_post 里同步：
+     *   WordPress 的写入顺序是 wp_insert_post()（触发 save_post）→ 紧接着 wp_set_object_terms()
+     *   设分类/标签、set_post_thumbnail() 设特色图。在 save_post 里读，拿到的是「改之前」的状态，
+     *   于是分类、标签、特色图全部丢失 —— 实测通过 REST 发文 100% 落 Uncategorized。
+     *   挪到 shutdown：那时 term 和缩略图都已就位。顺带把同一请求里的多次保存合并成一次。
+     */
+    public function queue_export($post_id, $post = null, $update = null) {
+        if (!empty($GLOBALS['cfse_skip_export'])) return;
+        if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+        if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) return;
+        $p = get_post($post_id);
+        if (!$p || $p->post_type !== 'post') return;
+        if (!in_array($p->post_status, array('publish', 'draft'), true)) return;
+        if (get_post_meta($post_id, '_cfse_probe', true) === '1') return;
+        self::$pending_export_ids[(int) $post_id] = true;
+        if (!self::$export_flush_registered) {
+            self::$export_flush_registered = true;
+            add_action('shutdown', array($this, 'flush_pending_exports'), 9);
+        }
+    }
+
+    /** shutdown：把队列里的文章逐篇同步（此时分类/标签/特色图都已写入） */
+    public function flush_pending_exports() {
+        if (empty(self::$pending_export_ids)) return;
+        $ids = array_keys(self::$pending_export_ids);
+        self::$pending_export_ids = array();
+        foreach ($ids as $id) {
+            $this->export_post($id, null, null, false);
+        }
+    }
+
     public function export_post($post_id, $post = null, $update = null, $force = false) {
         // 拉取 Worker 文章期间跳过回写（内容本就取自 Worker，回写是无谓开销）
         if (!empty($GLOBALS['cfse_skip_export'])) return;

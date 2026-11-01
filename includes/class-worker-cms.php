@@ -1377,6 +1377,29 @@ class CFSE_Sync_Worker_CMS {
         // content_format=md）；字段名与 D1 posts.content_format 同名。缺失即 html —— 零误判，历史文章行为不变。
         $content_format = $this->get_content_format($post->ID);
 
+        /*
+         * 图片地址改写：正文/特色图里指向「本站 uploads」的地址，换成 CMS 的同一路径。
+         *
+         * 图片文件本身由 sync_media_files() 传到 CMS 的 R2（key 就是 wp-content/uploads/…），
+         * 所以只要把 host 换掉就能直接访问；不换的话线上页面会去请求 WordPress 的地址
+         * （内网 IP 或源站），读者那边一律裂图。
+         *
+         * 只替换 uploads 前缀，不动站内其它链接 —— 文章 URL 在两边结构不同，乱换会更糟。
+         */
+        $content_out = $post->post_content;
+        $featured_out = get_the_post_thumbnail_url($post->ID, 'full') ?: '';
+        $cms_base = rtrim((string) (isset($this->config['site_url']) ? $this->config['site_url'] : ''), '/');
+        $wp_uploads = untrailingslashit(content_url('/uploads'));
+        if ($cms_base !== '' && $wp_uploads !== '') {
+            $cms_uploads = $cms_base . '/wp-content/uploads';
+            if (strpos($content_out, $wp_uploads) !== false) {
+                $content_out = str_replace($wp_uploads, $cms_uploads, $content_out);
+            }
+            if ($featured_out !== '' && strpos($featured_out, $wp_uploads) !== false) {
+                $featured_out = str_replace($wp_uploads, $cms_uploads, $featured_out);
+            }
+        }
+
         // 摘要：md 原稿先渲染成 HTML 再取纯文本，避免摘要里出现 ## 之类的标记
         $excerpt = $post->post_excerpt
             ? ($content_format === 'md' ? $this->md_to_plain($post->post_excerpt) : $post->post_excerpt)
@@ -1387,14 +1410,14 @@ class CFSE_Sync_Worker_CMS {
             'wp_id' => ($this->get_remote_wp_id($post->ID) ?: $post->ID),
             'slug' => $post->post_name,
             'title' => $post->post_title,
-            'content' => $post->post_content,
+            'content' => $content_out,
             'content_format' => $content_format,
             'excerpt' => $excerpt,
             'date' => $post->post_date,
             'modified' => $post->post_modified,
             'categories' => wp_json_encode($categories, JSON_UNESCAPED_UNICODE),
             'tags' => wp_json_encode($tags, JSON_UNESCAPED_UNICODE),
-            'featured_image' => get_the_post_thumbnail_url($post->ID, 'full') ?: '',
+            'featured_image' => $featured_out,
             'status' => ($post->post_status === 'draft' ? 'draft' : 'published'),
             // 文章级评论开关（'open'/'closed'）⇒ 静态站据此决定是否显示评论区与提交表单
             'comment_status' => ($post->comment_status === 'open' ? 'open' : 'closed'),
