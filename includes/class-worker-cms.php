@@ -602,7 +602,9 @@ class CFSE_Sync_Worker_CMS {
     // ============================================
     public function sync_media_files($content) {
         $urls = array();
-        preg_match_all('/<img[^>]+(?:src|data-src|data-lazy-src|data-original)=[\'"]?([^\'"\s>]+)/i', $content, $matches);
+        // 不能只扫 <img>：正文里的附件（zip / pdf / mp3 / mp4）是 <a href> 或 <video src>，
+        // 只认 <img> 会导致「文章里挂了下载链接，文件却没上传」——页面能打开，点下载 404。
+        preg_match_all('/(?:src|href|data-src|data-lazy-src|data-original)\s*=\s*[\'"]?([^\'"\s>]+)/i', $content, $matches);
         if (!empty($matches[1])) $urls = array_merge($urls, $matches[1]);
         if (preg_match_all('/srcset=[\'"]([^\'"]+)[\'"]/i', $content, $sets)) {
             foreach ($sets[1] as $set) {
@@ -612,16 +614,26 @@ class CFSE_Sync_Worker_CMS {
                 }
             }
         }
-        $urls = array_unique($urls);
+        // 只留本站 uploads 下的文件（正文里的站内文章链接、外链全部在这一步被滤掉）
+        $urls = array_values(array_unique(array_filter($urls, function ($u) {
+            return strpos($u, '/wp-content/uploads/') !== false;
+        })));
         if (self::$media_index === null) {
             $m = get_option('cfse_media_index', array());
             self::$media_index = is_array($m) ? $m : array();
         }
-        foreach ($urls as $image_url) {
-            $image_url = trim(str_replace(array('"', "'"), '', $image_url));
-            if (strpos($image_url, home_url()) === false) continue;
-            $path = ltrim(parse_url($image_url, PHP_URL_PATH), '/');
-            if (empty($path)) continue;
+        foreach ($urls as $media_url) {
+            $media_url = trim(str_replace(array('"', "'", '&amp;'), array('', '', '&'), $media_url));
+            if (preg_match('/^(data|mailto|javascript):/i', $media_url)) continue;
+            $path = ltrim((string) parse_url($media_url, PHP_URL_PATH), '/');
+            if ($path === '' || strpos($path, 'wp-content/uploads/') !== 0) continue;
+
+            // 归属校验：相对路径直接认；绝对地址比 host（home_url 可能 http/https 不一致）
+            if (preg_match('#^https?://#i', $media_url)) {
+                $h_src = strtolower((string) parse_url($media_url, PHP_URL_HOST));
+                $h_home = strtolower((string) parse_url(home_url(), PHP_URL_HOST));
+                if ($h_src === '' || $h_home === '' || $h_src !== $h_home) continue;
+            }
 
             // 去重：同一张图以前传过、且本地文件「大小+mtime」没变 ⇒ 直接跳过。
             // 旧实现每篇同步都把正文图片重新下载 + 重新上传一遍（无任何存在性检查），
@@ -629,7 +641,7 @@ class CFSE_Sync_Worker_CMS {
             $fp = $this->media_fingerprint($path);
             if ($fp !== '' && isset(self::$media_index[$path]) && self::$media_index[$path] === $fp) continue;
 
-            if ($this->upload_media_to_r2($image_url, $path)) {
+            if ($this->upload_media_to_r2($media_url, $path)) {
                 if ($fp !== '') {
                     self::$media_index[$path] = $fp;
                     self::$media_dirty = true;
@@ -1359,6 +1371,12 @@ class CFSE_Sync_Worker_CMS {
         $content_type = wp_remote_retrieve_header($response, 'content-type');
         if (is_array($content_type)) $content_type = $content_type[0];
         if (empty($content_type)) $content_type = 'application/octet-stream';
+        // /upload 是 base64 JSON（体积 ×4/3）+ 默认 30s 超时，大附件硬传只会超时并把日志刷满。
+        // 超过 20MB 的文件请直接放进 R2（或从 CMS 后台「媒体库 → 上传文件」传，走的是另一条路）。
+        if (strlen($content) > 20 * 1024 * 1024) {
+            $this->log('媒体超过 20MB，跳过自动上传：' . $path . '（' . size_format(strlen($content)) . '）', 'WARNING');
+            return false;
+        }
         return $this->upload_to_r2_via_worker($path, $content, $content_type, null);
     }
 

@@ -3,7 +3,7 @@
  * Plugin Name: CFSE Sync for WordPress
  * Plugin URI: https://github.com/yourname/cfse-sync
  * Description: 把 WordPress 变成自托管 CMS 的内容后台 —— 文章、分类、标签、评论、媒体同步到 Cloudflare D1 + R2，单页 HTML 由 Worker 现场渲染。
- * Version: 2.1.0
+ * Version: 2.1.1
  * Author: Your Name
  * License: GPL v2 or later
  * Requires at least: 5.5

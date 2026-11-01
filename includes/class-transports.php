@@ -110,7 +110,8 @@ class CFSE_Sync_Transports {
         if ($target['type'] === 'cfse-worker') {
             $body = array('path' => $path, 'content' => base64_encode($content), 'contentType' => $content_type, 'md5' => md5($content));
             if (!empty($content_encoding)) $body['contentEncoding'] = $content_encoding;
-            $resp = $this->worker_request($target, '/upload', 'POST', $body, 30);
+            // 附件（zip/pdf/音视频）体积比图片大得多，base64 后还要再涨 1/3；30s 会把大文件卡在超时上。
+            $resp = $this->worker_request($target, '/upload', 'POST', $body, 90);
             if ($resp === null) return false;
             $code = wp_remote_retrieve_response_code($resp);
             if ($code !== 200) {
