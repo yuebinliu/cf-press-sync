@@ -3,7 +3,7 @@
  * Plugin Name: CFSE Sync for WordPress
  * Plugin URI: https://github.com/yourname/cfse-sync
  * Description: 把 WordPress 变成自托管 CMS 的内容后台 —— 文章、分类、标签、评论、媒体同步到 Cloudflare D1 + R2，单页 HTML 由 Worker 现场渲染。
- * Version: 1.0.0
+ * Version: 2.1.0
  * Author: Your Name
  * License: GPL v2 or later
  * Requires at least: 5.5
@@ -54,7 +54,13 @@ if (defined('CFSE_VERSION')) {
 if (!defined('CFSE_VERSION')) define('CFSE_VERSION', '1.0.0');
 if (!defined('CFSE_PLUGIN_DIR')) define('CFSE_PLUGIN_DIR', plugin_dir_path(__FILE__));
 if (!defined('CFSE_PLUGIN_URL')) define('CFSE_PLUGIN_URL', plugin_dir_url(__FILE__));
-if (!defined('CFSE_LOG_FILE')) define('CFSE_LOG_FILE', WP_CONTENT_DIR . '/cf-static-export.log');
+if (!defined('CFSE_LOG_FILE')) {
+    // 剥离前的插件叫 cf-static-export，日志沿用它；升级用户继续写原文件（历史日志不丢），
+    // 全新安装才用新名字。
+    $cfse_new_log = WP_CONTENT_DIR . '/cfse-sync.log';
+    $cfse_old_log = WP_CONTENT_DIR . '/cf-static-export.log';
+    define('CFSE_LOG_FILE', (!file_exists($cfse_new_log) && file_exists($cfse_old_log)) ? $cfse_old_log : $cfse_new_log);
+}
 // 历史遗留：本插件不再生成静态文件，常量仅为兼容旧代码路径（本地目录 target / 清理残留）而保留
 if (!defined('CFSE_LOCAL_DIR')) define('CFSE_LOCAL_DIR', WP_CONTENT_DIR . '/cfse-static');
 // 「Worker 端诞生」的 wp_id 判据（见 ROADMAP I.1）：WP 侧自增 ID 远小于它，
