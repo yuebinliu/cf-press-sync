@@ -83,7 +83,7 @@ class CFSE_Sync_Admin_UI {
         $stats = $this->get_export_stats();
         ?>
         <div class="wrap cfse-settings">
-            <h1>🔗 CFSE Sync <span class="version">v<?php echo esc_html(CFSE_VERSION); ?></span></h1>
+            <h1>🔗 CF Press Sync <span class="version">v<?php echo esc_html(CFSE_VERSION); ?></span></h1>
 
             <?php if (isset($_GET['exported']) && isset($_GET['total'])): ?>
                 <div class="notice notice-success is-dismissible">
@@ -540,8 +540,8 @@ class CFSE_Sync_Admin_UI {
 
     public function add_admin_menu() {
         $hook = add_options_page(
-            'CFSE Sync',
-            'CFSE 同步',
+            'CF Press Sync',
+            'CF Press 同步',
             'manage_options',
             'cfse-sync',
             array($this, 'settings_page')
@@ -1275,7 +1275,7 @@ class CFSE_Sync_Admin_UI {
                     </label>
                 <?php } ?>
                 <?php if (empty($targets)) { ?>
-                    <p>还没有站点。请到「设置 → CFSE 同步 → 🎯 托管目标」添加。</p>
+                    <p>还没有站点。请到「设置 → CF Press 同步 → 🎯 托管目标」添加。</p>
                 <?php } ?>
                 <p style="text-align:right;margin-bottom:0;">
                     <button type="button" class="button button-primary" id="cfse-site-close">完成</button>

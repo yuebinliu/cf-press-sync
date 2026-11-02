@@ -6,6 +6,14 @@
 
 ## 状态
 
+**v2.2.0（2026-11-02）** —— 改名与上架准备。
+
+| 变化 | 说明 |
+|---|---|
+| **插件改名** | `CFSE Sync for WordPress` → **CF Press Sync**；后台菜单「CFSE 同步」→「CF Press 同步」；Text Domain → `cf-press-sync`。与 CMS 品牌（CF Press）对齐 |
+| 头部占位符清掉 | `Plugin URI` 还是 `github.com/yourname/…`、`Author` 还是 `Your Name` —— 上架前必须是真的 |
+| 内部类/常量前缀不变 | `CFSE_Sync_*` / `CFSE_VERSION` 属内部标识，改名收益为零、回归风险不小，保持原样 |
+
 **v2.1.1（2026-11-02）** —— 附件同步修好。
 
 | 变化 | 说明 |

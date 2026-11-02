@@ -1,6 +1,6 @@
 <?php
 /**
- * CFSE Sync for WordPress - uninstall
+ * CF Press Sync for WordPress - uninstall
  *
  * 卸载时仅清理 WordPress 本地的 option / 文章 meta / cron。
  * ⚠️ 不会删除 Cloudflare R2 / D1 / Worker —— 那些是你的线上站点数据，

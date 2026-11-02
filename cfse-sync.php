@@ -1,14 +1,14 @@
 <?php
 /**
- * Plugin Name: CFSE Sync for WordPress
- * Plugin URI: https://github.com/yourname/cfse-sync
+ * Plugin Name: CF Press Sync
+ * Plugin URI: https://github.com/yuebinliu/cfpress
  * Description: 把 WordPress 变成自托管 CMS 的内容后台 —— 文章、分类、标签、评论、媒体同步到 Cloudflare D1 + R2，单页 HTML 由 Worker 现场渲染。
- * Version: 2.1.1
- * Author: Your Name
+ * Version: 2.2.0
+ * Author: CF Press
  * License: GPL v2 or later
  * Requires at least: 5.5
  * Requires PHP: 7.0
- * Text Domain: cfse-sync
+ * Text Domain: cf-press-sync
  *
  * 本插件只负责「数据同步 + Worker 部署」，不做静态文件生成：
  *   · 发布/更新文章 → 写 D1（分类、标签、md 标记、评论开关一并写入）
@@ -28,7 +28,7 @@ if (!defined('ABSPATH')) {
 //
 // 同一个站点可能同时存在多份同源插件：
 //   · 旧版「CF Static Export Pro」（类名 CF_Static_Export_Pro / CFSE_Transports …）
-//   · 本插件 CFSE Sync（类名已独立为 CFSE_Sync_* ，互不冲突）
+//   · 本插件 CF Press Sync（类名已独立为 CFSE_Sync_* ，互不冲突）
 //   · 后续的 CMS 同步插件
 // 但它们的**常量前缀相同**（CFSE_VERSION / CFSE_PLUGIN_DIR …）。若旧插件先加载，
 // 我们的 `if (!defined(...))` 会让 CFSE_PLUGIN_DIR 指向**旧插件目录**，后面的
@@ -40,8 +40,8 @@ if (!defined('ABSPATH')) {
 // ============================================
 if (defined('CFSE_VERSION')) {
     add_action('admin_notices', function () {
-        echo '<div class="notice notice-error"><p><strong>CFSE Sync</strong> 未生效：'
-            . '检测到另一份 CF Static Export Pro / CFSE Sync 已经启用（常量 <code>CFSE_VERSION</code> 已定义，当前值 '
+        echo '<div class="notice notice-error"><p><strong>CF Press Sync</strong> 未生效：'
+            . '检测到另一份 CF Static Export Pro / CF Press Sync 已经启用（常量 <code>CFSE_VERSION</code> 已定义，当前值 '
             . esc_html(defined('CFSE_VERSION') ? CFSE_VERSION : '?') . '）。'
             . '两个插件共用同一套常量前缀，<b>不能同时启用</b> —— 请先到「插件」页停用旧的那个，再启用本插件。</p></div>';
     });
@@ -89,7 +89,7 @@ foreach ($cfse_required_modules as $cfse_mod) {
 }
 if (!empty($cfse_missing_modules)) {
     add_action('admin_notices', function () use ($cfse_missing_modules) {
-        echo '<div class="notice notice-error"><p><strong>CFSE Sync</strong> 未生效：插件文件不完整，'
+        echo '<div class="notice notice-error"><p><strong>CF Press Sync</strong> 未生效：插件文件不完整，'
             . '缺少以下模块 —— 请重新上传完整插件包（尤其 <code>includes/</code> 目录）。</p><ul style="margin-left:20px;list-style:disc;">';
         foreach ($cfse_missing_modules as $m) {
             echo '<li><code>' . esc_html($m) . '</code></li>';
@@ -114,7 +114,7 @@ unset($cfse_required_modules, $cfse_missing_modules, $cfse_mod);
 // ============================================
 if (version_compare(PHP_VERSION, '7.0.0', '<')) {
     add_action('admin_notices', function () {
-        echo '<div class="notice notice-error"><p><strong>CFSE Sync</strong> 需要 PHP 7.0 或更高版本，当前版本：' . esc_html(PHP_VERSION) . '，请升级PHP后再启用此插件。</p></div>';
+        echo '<div class="notice notice-error"><p><strong>CF Press Sync</strong> 需要 PHP 7.0 或更高版本，当前版本：' . esc_html(PHP_VERSION) . '，请升级PHP后再启用此插件。</p></div>';
     });
 }
 
@@ -123,7 +123,7 @@ if (version_compare(PHP_VERSION, '7.0.0', '<')) {
 // ============================================
 if (!extension_loaded('curl')) {
     add_action('admin_notices', function () {
-        echo '<div class="notice notice-error"><p><strong>CFSE Sync</strong> 需要 PHP cURL 扩展，请开启cURL后再启用此插件。</p></div>';
+        echo '<div class="notice notice-error"><p><strong>CF Press Sync</strong> 需要 PHP cURL 扩展，请开启cURL后再启用此插件。</p></div>';
     });
 }
 
@@ -1965,10 +1965,10 @@ try {
     CFSE_Sync_Plugin::get_instance();
 } catch (\Throwable $e) {
     $cfse_boot_error = $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine();
-    @error_log('[CFSE Sync] 启动失败: ' . $cfse_boot_error);
+    @error_log('[CF Press Sync] 启动失败: ' . $cfse_boot_error);
     if (function_exists('add_action')) {
         add_action('admin_notices', function () use ($cfse_boot_error) {
-            echo '<div class="notice notice-error"><p><strong>CFSE Sync 启动失败</strong>：'
+            echo '<div class="notice notice-error"><p><strong>CF Press Sync 启动失败</strong>：'
                 . esc_html($cfse_boot_error) . '</p>'
                 . '<p>请把这段信息（以及 <code>wp-content/debug.log</code> 里的对应记录）一并反馈。</p></div>';
         });
