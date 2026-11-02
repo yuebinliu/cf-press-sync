@@ -6,6 +6,13 @@
 
 ## 状态
 
+**v2.2.1（2026-11-02）** —— 发行包地址对齐。
+
+| 变化 | 说明 |
+|---|---|
+| 下载源统一到 `/releases/` | 官网源从 `/downloads/cf-cms-latest.tar.gz` 改为 `/releases/cms/latest.tar.gz`；旧路径在 Worker 侧 301 兜底 |
+| 默认 GitHub 仓库修正 | 原来写的是 `cfse/cf-cms`（不存在），改为 `yuebinliu/cfpress` |
+
 **v2.2.0（2026-11-02）** —— 改名与上架准备。
 
 | 变化 | 说明 |

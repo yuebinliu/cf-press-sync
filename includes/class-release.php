@@ -51,7 +51,7 @@ class CFSE_Sync_Release {
 
     /** 默认下载源（可配置） */
     const DEFAULT_SITE_URL = 'https://yuebin.uk';
-    const DEFAULT_GITHUB_REPO = 'cfse/cf-cms';
+    const DEFAULT_GITHUB_REPO = 'yuebinliu/cfpress';
 
     /** 官方固定生产地址（作为第三备源；workers.dev 在国内可能被 DNS 污染，
      *  但作为「下载地址字符串」不影响插件逻辑） */
@@ -105,13 +105,13 @@ class CFSE_Sync_Release {
             $sources[] = array(
                 'name' => '官网（' . $site . '）',
                 'type' => 'direct',
-                'url'  => $site . '/downloads/cf-cms-latest.tar.gz',
+                'url'  => $site . '/releases/cms/latest.tar.gz',
             );
         }
         $sources[] = array(
             'name' => '固定生产地址',
             'type' => 'direct',
-            'url'  => self::DEFAULT_WORKERS_URL . '/downloads/cf-cms-latest.tar.gz',
+            'url'  => self::DEFAULT_WORKERS_URL . '/releases/cms/latest.tar.gz',
         );
 
         return $sources;

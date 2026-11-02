@@ -4,7 +4,7 @@ Tags: cms, headless, cloudflare, d1, r2, worker, static site
 Requires at least: 5.5
 Tested up to: 6.8
 Requires PHP: 7.0
-Stable tag: 2.2.0
+Stable tag: 2.2.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
